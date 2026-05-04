@@ -1,0 +1,200 @@
+{
+  "meta": {
+    "version": 1,
+    "updatedAt": "2026-05-03T20:41:45.471Z"
+  },
+  "adminUsers": [
+    {
+      "id": 1,
+      "username": "admin",
+      "password": "admin123",
+      "displayName": "Quentin Admin",
+      "role": "super_admin",
+      "status": "active"
+    }
+  ],
+  "columns": [
+    {
+      "id": 1,
+      "name": "昆廷笔记",
+      "slug": "kunting",
+      "categoryType": "column",
+      "description": "技术、产品与 AI 提效实践。",
+      "sortOrder": 10,
+      "status": "published"
+    },
+    {
+      "id": 2,
+      "name": "启鸣宝宝",
+      "slug": "qiming",
+      "categoryType": "column",
+      "description": "聚焦启蒙教育、亲子陪伴与家庭成长。",
+      "sortOrder": 20,
+      "status": "published"
+    }
+  ],
+  "tags": [
+    {
+      "id": 1,
+      "name": "AI 提效",
+      "slug": "ai-efficiency",
+      "tagType": "article",
+      "status": "active"
+    },
+    {
+      "id": 2,
+      "name": "工作流",
+      "slug": "workflow",
+      "tagType": "article",
+      "status": "active"
+    },
+    {
+      "id": 3,
+      "name": "效率工具",
+      "slug": "efficiency-tools",
+      "tagType": "article",
+      "status": "active"
+    },
+    {
+      "id": 4,
+      "name": "幼小衔接",
+      "slug": "school-transition",
+      "tagType": "article",
+      "status": "active"
+    },
+    {
+      "id": 5,
+      "name": "育儿启蒙",
+      "slug": "parenting-education",
+      "tagType": "article",
+      "status": "active"
+    },
+    {
+      "id": 6,
+      "name": "独立开发",
+      "slug": "indie-dev",
+      "tagType": "article",
+      "status": "active"
+    },
+    {
+      "id": 7,
+      "name": "App 开发",
+      "slug": "app-development",
+      "tagType": "article",
+      "status": "active"
+    },
+    {
+      "id": 8,
+      "name": "产品思考",
+      "slug": "product-thinking",
+      "tagType": "article",
+      "status": "active"
+    },
+    {
+      "id": 9,
+      "name": "亲子游戏",
+      "slug": "family-games",
+      "tagType": "article",
+      "status": "active"
+    },
+    {
+      "id": 10,
+      "name": "陪伴成长",
+      "slug": "growth-together",
+      "tagType": "article",
+      "status": "active"
+    }
+  ],
+  "articles": [
+    {
+      "id": 1,
+      "title": "我的 AI 提效工作流：从信息输入到高质量输出",
+      "slug": "ai-workflow-output",
+      "summary": "分享我如何把搜集、整理、提炼、写作和复盘串起来，形成稳定可复用的 AI 工作流。",
+      "contentBody": "## 为什么你需要一个属于自己的效率系统\n\n高质量输出，往往不是从一个更强的模型开始，而是从更清晰的信息输入开始。\n\n很多人在寻找神奇工具，但真正稳定的效率，往往来自你是否建立了属于自己的系统。\n\n## 第一步：信息收集与处理\n\n我会先把碎片输入分成三类：原始素材、待验证线索、可直接引用的结构化结论。\n\n## 第二步：任务管理与执行\n\n第二步是把问题拆成更小的动作，比如提纲、归纳、改写、补例子，而不是一次把所有工作丢给模型。\n\n## 第三步：回顾与迭代优化\n\n真正提高效率的关键，不是每次都追求神奇输出，而是让同一套流程可以被重复执行。",
+      "authorName": "昆廷",
+      "columnId": 1,
+      "tagIds": [
+        1,
+        2,
+        3
+      ],
+      "coverImage": "/src/assets/images/shucai/articles/article-thumb-1.jpg",
+      "heroTone": "warm",
+      "status": "published",
+      "sourceType": "original",
+      "publishedAt": "2026-04-20T00:00:00.000Z",
+      "viewCount": 1200,
+      "likeCount": 128,
+      "createdAt": "2026-04-20T00:00:00.000Z",
+      "updatedAt": "2026-05-04T00:00:00.000Z"
+    },
+    {
+      "id": 2,
+      "title": "幼小衔接，不焦虑的节奏感养成指南",
+      "slug": "kindergarten-transition-rhythm",
+      "summary": "从作息调整到心理准备，从学习习惯到社交能力，帮助家长和孩子平稳过渡。",
+      "contentBody": "## 幼小衔接最重要的不是提前学多少\n\n幼小衔接最容易被误解成提前学很多知识，但更重要的是节奏感。\n\n## 先把作息与任务感稳定下来\n\n规律作息、任务意识、独立表达和情绪稳定，往往比多做几页练习更有价值。\n\n## 把准备入学变成可持续的小习惯\n\n如果家庭能把准备入学变成一套可持续的小习惯，孩子会更从容。",
+      "authorName": "启鸣妈妈",
+      "columnId": 2,
+      "tagIds": [
+        4,
+        5
+      ],
+      "coverImage": "/src/assets/images/shucai/articles/article-thumb-2.jpg",
+      "heroTone": "warm",
+      "status": "published",
+      "sourceType": "original",
+      "publishedAt": "2026-04-18T00:00:00.000Z",
+      "viewCount": 856,
+      "likeCount": 96,
+      "createdAt": "2026-04-18T00:00:00.000Z",
+      "updatedAt": "2026-05-04T00:00:00.000Z"
+    },
+    {
+      "id": 3,
+      "title": "独立开发者的第一个 App：从 0 到 1 的 90 天",
+      "slug": "first-app-in-90-days",
+      "summary": "记录从想法萌芽到 App 上架的完整过程，包括技术选型、产品设计和上线后的反馈。",
+      "contentBody": "## 先别急着做，先确定第一步\n\n从 0 到 1 的困难，很多时候不是不会做，而是不知道先做哪一步。\n\n## 把 90 天拆成 5 个阶段\n\n我把 90 天拆成调研、原型、MVP、验证和上线五个阶段，每个阶段只抓一个主目标。\n\n## 用持续曝光代替一次性冲刺\n\n最有效的节奏不是连续高强度冲刺，而是每周都能对外看到一点进展。",
+      "authorName": "昆廷",
+      "columnId": 1,
+      "tagIds": [
+        6,
+        7,
+        8
+      ],
+      "coverImage": "/src/assets/images/shucai/articles/article-thumb-3.jpg",
+      "heroTone": "cool",
+      "status": "published",
+      "sourceType": "original",
+      "publishedAt": "2026-04-15T00:00:00.000Z",
+      "viewCount": 1600,
+      "likeCount": 173,
+      "createdAt": "2026-04-15T00:00:00.000Z",
+      "updatedAt": "2026-05-04T00:00:00.000Z"
+    },
+    {
+      "id": 4,
+      "title": "亲子桌游推荐：让陪伴变得更有趣",
+      "slug": "family-boardgame-list",
+      "summary": "精选适合 3-8 岁孩子的亲子桌游，从益智启蒙到策略思维，附带年龄适配建议。",
+      "contentBody": "## 什么样的桌游更适合亲子陪伴\n\n真正适合亲子陪伴的桌游，不一定是规则最复杂的，而是能让孩子愿意反复参与的。\n\n## 优先考虑反馈快、挫败感低的游戏\n\n我会优先挑选反馈快、挫败感低、家长也愿意一起玩的桌游。\n\n## 陪伴价值往往大于知识点\n\n如果一款游戏能自然带出轮流、观察、表达和情绪管理，它的价值会远大于学到了什么知识。",
+      "authorName": "启鸣妈妈",
+      "columnId": 2,
+      "tagIds": [
+        9,
+        10
+      ],
+      "coverImage": "/src/assets/images/shucai/articles/article-thumb-4.jpg",
+      "heroTone": "warm",
+      "status": "published",
+      "sourceType": "original",
+      "publishedAt": "2026-04-12T00:00:00.000Z",
+      "viewCount": 732,
+      "likeCount": 88,
+      "createdAt": "2026-04-12T00:00:00.000Z",
+      "updatedAt": "2026-05-04T00:00:00.000Z"
+    }
+  ]
+}
