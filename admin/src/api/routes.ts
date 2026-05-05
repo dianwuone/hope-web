@@ -41,6 +41,14 @@ export const getAsyncRoutes = () => {
             meta: {
               title: "商品管理"
             }
+          },
+          {
+            path: "/content/ads",
+            name: "AdminAds",
+            component: "content/ads/index",
+            meta: {
+              title: "广告管理"
+            }
           }
         ]
       },
@@ -69,6 +77,43 @@ export const getAsyncRoutes = () => {
             component: "system/page-configs/index",
             meta: {
               title: "页面配置"
+            }
+          }
+        ]
+      },
+      {
+        path: "/operations",
+        name: "Operations",
+        component: "content/index",
+        redirect: "/operations/wishlist",
+        meta: {
+          icon: "ep:DataAnalysis",
+          title: "运营管理",
+          rank: 3
+        },
+        children: [
+          {
+            path: "/operations/wishlist",
+            name: "AdminWishlist",
+            component: "operations/wishlist/index",
+            meta: {
+              title: "心愿单管理"
+            }
+          },
+          {
+            path: "/operations/leads",
+            name: "AdminLeads",
+            component: "operations/leads/index",
+            meta: {
+              title: "用户线索管理"
+            }
+          },
+          {
+            path: "/operations/beta-applications",
+            name: "AdminBetaApplications",
+            component: "operations/beta-applications/index",
+            meta: {
+              title: "内测申请管理"
             }
           }
         ]

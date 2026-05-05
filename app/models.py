@@ -125,6 +125,77 @@ class Offer(Base):
     updatedAt = Column(DateTime(timezone=False), nullable=False)
 
 
+class AdItem(Base):
+    __tablename__ = "ad_items"
+
+    id = Column(Integer, primary_key=True, index=True)
+    slotKey = Column(String(100), nullable=False, index=True)
+    title = Column(String(150), nullable=False)
+    pageKey = Column(String(100), nullable=True, index=True)
+    imageUrl = Column(String(255), nullable=False, default="")
+    targetUrl = Column(String(255), nullable=False, default="")
+    description = Column(Text, nullable=True)
+    ctaLabel = Column(String(50), nullable=True)
+    status = Column(String(20), nullable=False, default="draft")
+    sortOrder = Column(Integer, nullable=False, default=0)
+    startAt = Column(DateTime(timezone=False), nullable=True)
+    endAt = Column(DateTime(timezone=False), nullable=True)
+    payloadJson = Column(Text, nullable=False, default="{}")
+    createdAt = Column(DateTime(timezone=False), nullable=False)
+    updatedAt = Column(DateTime(timezone=False), nullable=False)
+
+
+class BetaApplication(Base):
+    __tablename__ = "beta_applications"
+
+    id = Column(Integer, primary_key=True, index=True)
+    projectSlug = Column(String(120), nullable=True, index=True)
+    sourcePage = Column(String(50), nullable=False, default="lab")
+    roleType = Column(String(30), nullable=False)
+    name = Column(String(50), nullable=False)
+    contactType = Column(String(20), nullable=False)
+    contactValue = Column(String(100), nullable=False)
+    city = Column(String(50), nullable=True)
+    experienceNote = Column(Text, nullable=True)
+    status = Column(String(20), nullable=False, default="pending")
+    followUpNote = Column(Text, nullable=True)
+    createdAt = Column(DateTime(timezone=False), nullable=False)
+    updatedAt = Column(DateTime(timezone=False), nullable=False)
+
+
+class CommunityLead(Base):
+    __tablename__ = "community_leads"
+
+    id = Column(Integer, primary_key=True, index=True)
+    leadType = Column(String(20), nullable=False, default="community")
+    intentReason = Column(String(30), nullable=False)
+    name = Column(String(50), nullable=True)
+    contactType = Column(String(20), nullable=False)
+    contactValue = Column(String(100), nullable=False)
+    message = Column(Text, nullable=True)
+    status = Column(String(20), nullable=False, default="new")
+    createdAt = Column(DateTime(timezone=False), nullable=False)
+    updatedAt = Column(DateTime(timezone=False), nullable=False)
+
+
+class WishlistItem(Base):
+    __tablename__ = "wishlist_items"
+
+    id = Column(Integer, primary_key=True, index=True)
+    visitorId = Column(String(64), nullable=False, index=True)
+    projectSlug = Column(String(120), nullable=True, index=True)
+    projectName = Column(String(120), nullable=True)
+    category = Column(String(30), nullable=True)
+    wishState = Column(String(20), nullable=False, default="want_try")
+    sourcePage = Column(String(50), nullable=True)
+    contactType = Column(String(20), nullable=True)
+    contactValue = Column(String(100), nullable=True)
+    note = Column(Text, nullable=True)
+    isActive = Column(Integer, nullable=False, default=1)
+    createdAt = Column(DateTime(timezone=False), nullable=False)
+    updatedAt = Column(DateTime(timezone=False), nullable=False)
+
+
 class Article(Base):
     __tablename__ = "articles"
 

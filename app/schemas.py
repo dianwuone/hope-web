@@ -217,3 +217,140 @@ class OfferOut(ApiModel):
     extra: dict = Field(default_factory=dict)
     createdAt: datetime
     updatedAt: datetime
+
+
+class AdItemWrite(BaseModel):
+    slotKey: str
+    title: str
+    pageKey: str = ""
+    imageUrl: str = ""
+    targetUrl: str = ""
+    description: str = ""
+    ctaLabel: str = ""
+    status: str = "draft"
+    sortOrder: int = 0
+    startAt: datetime | None = None
+    endAt: datetime | None = None
+    payload: dict = Field(default_factory=dict)
+
+
+class AdItemOut(ApiModel):
+    id: int
+    slotKey: str
+    title: str
+    pageKey: str | None = None
+    imageUrl: str
+    targetUrl: str
+    description: str | None = None
+    ctaLabel: str | None = None
+    status: str
+    sortOrder: int
+    startAt: datetime | None = None
+    endAt: datetime | None = None
+    payload: dict = Field(default_factory=dict)
+    createdAt: datetime
+    updatedAt: datetime
+
+
+class WishlistWrite(BaseModel):
+    visitorId: str = ""
+    projectSlug: str = ""
+    projectName: str = ""
+    category: str = ""
+    wishState: str = "want_try"
+    sourcePage: str = "wishlist"
+    contactType: str = ""
+    contactValue: str = ""
+    note: str = ""
+    isActive: bool = True
+
+
+class WishlistUpdate(BaseModel):
+    wishState: str = "want_try"
+    isActive: bool = True
+    contactType: str = ""
+    contactValue: str = ""
+    note: str = ""
+
+
+class WishlistOut(ApiModel):
+    id: int
+    visitorId: str
+    projectSlug: str | None = None
+    projectName: str | None = None
+    category: str | None = None
+    wishState: str
+    sourcePage: str | None = None
+    contactType: str | None = None
+    contactValue: str | None = None
+    note: str | None = None
+    isActive: int
+    createdAt: datetime
+    updatedAt: datetime
+
+
+class CommunityLeadWrite(BaseModel):
+    leadType: str = "community"
+    intentReason: str = "latest_updates"
+    name: str = ""
+    contactType: str = "wechat"
+    contactValue: str
+    message: str = ""
+
+
+class CommunityLeadUpdate(BaseModel):
+    status: str = "new"
+    message: str = ""
+
+
+class CommunityLeadOut(ApiModel):
+    id: int
+    leadType: str
+    intentReason: str
+    name: str | None = None
+    contactType: str
+    contactValue: str
+    message: str | None = None
+    status: str
+    createdAt: datetime
+    updatedAt: datetime
+
+
+class BetaApplicationWrite(BaseModel):
+    projectSlug: str = ""
+    sourcePage: str = "lab"
+    roleType: str = "explorer"
+    name: str
+    contactType: str = "wechat"
+    contactValue: str
+    city: str = ""
+    experienceNote: str = ""
+    status: str = "pending"
+
+
+class BetaApplicationUpdate(BaseModel):
+    status: str = "pending"
+    followUpNote: str = ""
+
+
+class BetaApplicationOut(ApiModel):
+    id: int
+    projectSlug: str | None = None
+    sourcePage: str
+    roleType: str
+    name: str
+    contactType: str
+    contactValue: str
+    city: str | None = None
+    experienceNote: str | None = None
+    status: str
+    followUpNote: str | None = None
+    createdAt: datetime
+    updatedAt: datetime
+
+
+class DashboardResponse(ApiModel):
+    overview: dict
+    wishlist: dict
+    leads: dict
+    beta: dict

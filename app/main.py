@@ -12,10 +12,31 @@ from sqlalchemy.orm import Session, joinedload
 from .auth import login as do_login
 from .auth import require_auth
 from .database import BASE_DIR, Base, SessionLocal, engine, get_db
-from .models import Article, ContentCategory, ContentTag, Offer, PageConfig, Project, SiteConfig
+from .models import (
+    AdItem,
+    Article,
+    BetaApplication,
+    CommunityLead,
+    ContentCategory,
+    ContentTag,
+    Offer,
+    PageConfig,
+    Project,
+    SiteConfig,
+    WishlistItem,
+)
 from .schemas import (
+    AdItemOut,
+    AdItemWrite,
     ArticleOut,
     ArticleWrite,
+    BetaApplicationOut,
+    BetaApplicationUpdate,
+    BetaApplicationWrite,
+    CommunityLeadOut,
+    CommunityLeadUpdate,
+    CommunityLeadWrite,
+    DashboardResponse,
     DeleteResponse,
     HealthResponse,
     LoginResponse,
@@ -28,6 +49,9 @@ from .schemas import (
     SiteConfigOut,
     SiteConfigWrite,
     UserLoginRequest,
+    WishlistOut,
+    WishlistUpdate,
+    WishlistWrite,
 )
 from .seed import seed_if_empty
 
@@ -43,6 +67,9 @@ app.add_middleware(
 ADMIN_DIST_DIR = BASE_DIR / "admin" / "dist"
 ADMIN_DIST_INDEX = ADMIN_DIST_DIR / "index.html"
 ADMIN_DIST_STATIC = ADMIN_DIST_DIR / "static"
+ADMIN_DIST_PLATFORM_CONFIG = ADMIN_DIST_DIR / "platform-config.json"
+ADMIN_DIST_FAVICON = ADMIN_DIST_DIR / "favicon.ico"
+ADMIN_DIST_LOGO = ADMIN_DIST_DIR / "logo.svg"
 SEED_FILE = BASE_DIR / "data" / "content.json"
 
 
@@ -184,6 +211,77 @@ def serialize_offer(item: Offer) -> dict:
     }
 
 
+def serialize_ad_item(item: AdItem) -> dict:
+    return {
+        "id": item.id,
+        "slotKey": item.slotKey,
+        "title": item.title,
+        "pageKey": item.pageKey,
+        "imageUrl": item.imageUrl,
+        "targetUrl": item.targetUrl,
+        "description": item.description,
+        "ctaLabel": item.ctaLabel,
+        "status": item.status,
+        "sortOrder": item.sortOrder,
+        "startAt": item.startAt,
+        "endAt": item.endAt,
+        "payload": parse_json_dict(item.payloadJson),
+        "createdAt": item.createdAt,
+        "updatedAt": item.updatedAt,
+    }
+
+
+def serialize_wishlist_item(item: WishlistItem) -> dict:
+    return {
+        "id": item.id,
+        "visitorId": item.visitorId,
+        "projectSlug": item.projectSlug,
+        "projectName": item.projectName,
+        "category": item.category,
+        "wishState": item.wishState,
+        "sourcePage": item.sourcePage,
+        "contactType": item.contactType,
+        "contactValue": item.contactValue,
+        "note": item.note,
+        "isActive": item.isActive,
+        "createdAt": item.createdAt,
+        "updatedAt": item.updatedAt,
+    }
+
+
+def serialize_community_lead(item: CommunityLead) -> dict:
+    return {
+        "id": item.id,
+        "leadType": item.leadType,
+        "intentReason": item.intentReason,
+        "name": item.name,
+        "contactType": item.contactType,
+        "contactValue": item.contactValue,
+        "message": item.message,
+        "status": item.status,
+        "createdAt": item.createdAt,
+        "updatedAt": item.updatedAt,
+    }
+
+
+def serialize_beta_application(item: BetaApplication) -> dict:
+    return {
+        "id": item.id,
+        "projectSlug": item.projectSlug,
+        "sourcePage": item.sourcePage,
+        "roleType": item.roleType,
+        "name": item.name,
+        "contactType": item.contactType,
+        "contactValue": item.contactValue,
+        "city": item.city,
+        "experienceNote": item.experienceNote,
+        "status": item.status,
+        "followUpNote": item.followUpNote,
+        "createdAt": item.createdAt,
+        "updatedAt": item.updatedAt,
+    }
+
+
 def sanitize_article_input(payload: ArticleWrite, db: Session) -> dict:
     data = payload.model_dump()
     data["title"] = data["title"].strip()
@@ -285,6 +383,66 @@ def sanitize_offer_input(payload: OfferWrite) -> dict:
     return data
 
 
+def sanitize_ad_item_input(payload: AdItemWrite) -> dict:
+    data = payload.model_dump()
+    data["slotKey"] = data["slotKey"].strip()
+    data["title"] = data["title"].strip()
+    data["pageKey"] = data["pageKey"].strip()
+    data["imageUrl"] = data["imageUrl"].strip()
+    data["targetUrl"] = data["targetUrl"].strip()
+    data["description"] = data["description"].strip()
+    data["ctaLabel"] = data["ctaLabel"].strip()
+    data["status"] = data["status"].strip() or "draft"
+    if not data["slotKey"] or not data["title"]:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="slotKey 和 title 不能为空")
+    return data
+
+
+def sanitize_wishlist_input(payload: WishlistWrite) -> dict:
+    data = payload.model_dump()
+    data["visitorId"] = data["visitorId"].strip() or f"guest-{int(datetime.utcnow().timestamp() * 1000)}"
+    data["projectSlug"] = data["projectSlug"].strip()
+    data["projectName"] = data["projectName"].strip()
+    data["category"] = data["category"].strip()
+    data["wishState"] = data["wishState"].strip() or "want_try"
+    data["sourcePage"] = data["sourcePage"].strip() or "wishlist"
+    data["contactType"] = data["contactType"].strip()
+    data["contactValue"] = data["contactValue"].strip()
+    data["note"] = data["note"].strip()
+    if not data["projectSlug"] and not data["projectName"]:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="projectSlug 或 projectName 至少填写一个")
+    return data
+
+
+def sanitize_community_lead_input(payload: CommunityLeadWrite) -> dict:
+    data = payload.model_dump()
+    data["leadType"] = data["leadType"].strip() or "community"
+    data["intentReason"] = data["intentReason"].strip() or "latest_updates"
+    data["name"] = data["name"].strip()
+    data["contactType"] = data["contactType"].strip() or "wechat"
+    data["contactValue"] = data["contactValue"].strip()
+    data["message"] = data["message"].strip()
+    if not data["contactValue"]:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="联系方式不能为空")
+    return data
+
+
+def sanitize_beta_application_input(payload: BetaApplicationWrite) -> dict:
+    data = payload.model_dump()
+    data["projectSlug"] = data["projectSlug"].strip()
+    data["sourcePage"] = data["sourcePage"].strip() or "lab"
+    data["roleType"] = data["roleType"].strip() or "explorer"
+    data["name"] = data["name"].strip()
+    data["contactType"] = data["contactType"].strip() or "wechat"
+    data["contactValue"] = data["contactValue"].strip()
+    data["city"] = data["city"].strip()
+    data["experienceNote"] = data["experienceNote"].strip()
+    data["status"] = data["status"].strip() or "pending"
+    if not data["name"] or not data["contactValue"]:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="姓名和联系方式不能为空")
+    return data
+
+
 @app.on_event("startup")
 def startup() -> None:
     Base.metadata.create_all(bind=engine)
@@ -298,6 +456,27 @@ if ADMIN_DIST_STATIC.exists():
 @app.get("/", include_in_schema=False)
 def root_redirect() -> RedirectResponse:
     return RedirectResponse(url="/admin")
+
+
+@app.get("/admin/platform-config.json", include_in_schema=False)
+def admin_platform_config() -> FileResponse:
+    if ADMIN_DIST_PLATFORM_CONFIG.exists():
+        return FileResponse(ADMIN_DIST_PLATFORM_CONFIG, media_type="application/json")
+    raise HTTPException(status_code=404, detail="platform-config.json not found")
+
+
+@app.get("/admin/favicon.ico", include_in_schema=False)
+def admin_favicon() -> FileResponse:
+    if ADMIN_DIST_FAVICON.exists():
+        return FileResponse(ADMIN_DIST_FAVICON)
+    raise HTTPException(status_code=404, detail="favicon.ico not found")
+
+
+@app.get("/admin/logo.svg", include_in_schema=False)
+def admin_logo() -> FileResponse:
+    if ADMIN_DIST_LOGO.exists():
+        return FileResponse(ADMIN_DIST_LOGO, media_type="image/svg+xml")
+    raise HTTPException(status_code=404, detail="logo.svg not found")
 
 
 @app.get("/admin", include_in_schema=False)
@@ -427,12 +606,115 @@ def get_offer(slug: str, db: Session = Depends(get_db)) -> OfferOut:
     return OfferOut.model_validate(serialize_offer(item))
 
 
+@app.get("/api/ads")
+def list_ads(
+    pageKey: str = Query(default=""),
+    slotKey: str = Query(default=""),
+    db: Session = Depends(get_db),
+) -> dict:
+    now = datetime.utcnow()
+    query = db.query(AdItem).order_by(AdItem.sortOrder.asc(), AdItem.id.asc()).filter(AdItem.status == "active")
+    if pageKey.strip():
+        query = query.filter((AdItem.pageKey == pageKey.strip()) | (AdItem.pageKey.is_(None)))
+    if slotKey.strip():
+        query = query.filter(AdItem.slotKey == slotKey.strip())
+    items = [
+        item
+        for item in query.all()
+        if (item.startAt is None or item.startAt <= now) and (item.endAt is None or item.endAt >= now)
+    ]
+    serialized = [serialize_ad_item(item) for item in items]
+    return {"items": serialized, "total": len(serialized)}
+
+
 @app.get("/api/page-configs/{page_key}", response_model=PageConfigOut)
 def get_page_config(page_key: str, db: Session = Depends(get_db)) -> PageConfigOut:
     item = db.query(PageConfig).filter(PageConfig.pageKey == page_key).first()
     if not item:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
     return PageConfigOut.model_validate(serialize_page_config(item))
+
+
+@app.post("/api/wishlist", response_model=WishlistOut, status_code=status.HTTP_201_CREATED)
+def create_wishlist_item(payload: WishlistWrite, db: Session = Depends(get_db)) -> WishlistOut:
+    data = sanitize_wishlist_input(payload)
+    now = datetime.utcnow()
+    item = WishlistItem(
+        visitorId=data["visitorId"],
+        projectSlug=data["projectSlug"] or None,
+        projectName=data["projectName"] or None,
+        category=data["category"] or None,
+        wishState=data["wishState"],
+        sourcePage=data["sourcePage"] or None,
+        contactType=data["contactType"] or None,
+        contactValue=data["contactValue"] or None,
+        note=data["note"] or None,
+        isActive=1 if data["isActive"] else 0,
+        createdAt=now,
+        updatedAt=now,
+    )
+    db.add(item)
+    db.commit()
+    db.refresh(item)
+    return WishlistOut.model_validate(serialize_wishlist_item(item))
+
+
+@app.get("/api/wishlist/summary")
+def wishlist_summary(visitorId: str = Query(default=""), db: Session = Depends(get_db)) -> dict:
+    query = db.query(WishlistItem).order_by(WishlistItem.updatedAt.desc(), WishlistItem.id.desc())
+    if visitorId.strip():
+        query = query.filter(WishlistItem.visitorId == visitorId.strip())
+    items = query.all()
+    serialized = [serialize_wishlist_item(item) for item in items]
+    state_counts: dict[str, int] = {}
+    for item in serialized:
+        state_counts[item["wishState"]] = state_counts.get(item["wishState"], 0) + 1
+    return {"items": serialized, "total": len(serialized), "states": state_counts}
+
+
+@app.post("/api/community-leads", response_model=CommunityLeadOut, status_code=status.HTTP_201_CREATED)
+def create_community_lead(payload: CommunityLeadWrite, db: Session = Depends(get_db)) -> CommunityLeadOut:
+    data = sanitize_community_lead_input(payload)
+    now = datetime.utcnow()
+    item = CommunityLead(
+        leadType=data["leadType"],
+        intentReason=data["intentReason"],
+        name=data["name"] or None,
+        contactType=data["contactType"],
+        contactValue=data["contactValue"],
+        message=data["message"] or None,
+        status="new",
+        createdAt=now,
+        updatedAt=now,
+    )
+    db.add(item)
+    db.commit()
+    db.refresh(item)
+    return CommunityLeadOut.model_validate(serialize_community_lead(item))
+
+
+@app.post("/api/beta-applications", response_model=BetaApplicationOut, status_code=status.HTTP_201_CREATED)
+def create_beta_application(payload: BetaApplicationWrite, db: Session = Depends(get_db)) -> BetaApplicationOut:
+    data = sanitize_beta_application_input(payload)
+    now = datetime.utcnow()
+    item = BetaApplication(
+        projectSlug=data["projectSlug"] or None,
+        sourcePage=data["sourcePage"],
+        roleType=data["roleType"],
+        name=data["name"],
+        contactType=data["contactType"],
+        contactValue=data["contactValue"],
+        city=data["city"] or None,
+        experienceNote=data["experienceNote"] or None,
+        status=data["status"],
+        followUpNote=None,
+        createdAt=now,
+        updatedAt=now,
+    )
+    db.add(item)
+    db.commit()
+    db.refresh(item)
+    return BetaApplicationOut.model_validate(serialize_beta_application(item))
 
 
 @app.get("/api/admin/articles")
@@ -719,6 +1001,95 @@ def list_admin_offers(_: dict = Depends(require_auth), db: Session = Depends(get
     return {"items": [serialize_offer(item) for item in items], "total": len(items)}
 
 
+@app.get("/api/admin/ads")
+def list_admin_ads(
+    pageKey: str = Query(default=""),
+    slotKey: str = Query(default=""),
+    _: dict = Depends(require_auth),
+    db: Session = Depends(get_db),
+) -> dict:
+    query = db.query(AdItem).order_by(AdItem.sortOrder.asc(), AdItem.id.asc())
+    if pageKey.strip():
+        query = query.filter(AdItem.pageKey == pageKey.strip())
+    if slotKey.strip():
+        query = query.filter(AdItem.slotKey == slotKey.strip())
+    items = query.all()
+    return {"items": [serialize_ad_item(item) for item in items], "total": len(items)}
+
+
+@app.post("/api/admin/ads", response_model=AdItemOut, status_code=status.HTTP_201_CREATED)
+def create_ad_item(
+    payload: AdItemWrite,
+    _: dict = Depends(require_auth),
+    db: Session = Depends(get_db),
+) -> AdItemOut:
+    data = sanitize_ad_item_input(payload)
+    now = datetime.utcnow()
+    item = AdItem(
+        slotKey=data["slotKey"],
+        title=data["title"],
+        pageKey=data["pageKey"] or None,
+        imageUrl=data["imageUrl"],
+        targetUrl=data["targetUrl"],
+        description=data["description"] or None,
+        ctaLabel=data["ctaLabel"] or None,
+        status=data["status"],
+        sortOrder=data["sortOrder"],
+        startAt=data["startAt"],
+        endAt=data["endAt"],
+        payloadJson=json.dumps(data["payload"], ensure_ascii=False),
+        createdAt=now,
+        updatedAt=now,
+    )
+    db.add(item)
+    db.commit()
+    db.refresh(item)
+    return AdItemOut.model_validate(serialize_ad_item(item))
+
+
+@app.put("/api/admin/ads/{ad_id}", response_model=AdItemOut)
+def update_ad_item(
+    ad_id: int,
+    payload: AdItemWrite,
+    _: dict = Depends(require_auth),
+    db: Session = Depends(get_db),
+) -> AdItemOut:
+    item = db.query(AdItem).filter(AdItem.id == ad_id).first()
+    if not item:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+    data = sanitize_ad_item_input(payload)
+    item.slotKey = data["slotKey"]
+    item.title = data["title"]
+    item.pageKey = data["pageKey"] or None
+    item.imageUrl = data["imageUrl"]
+    item.targetUrl = data["targetUrl"]
+    item.description = data["description"] or None
+    item.ctaLabel = data["ctaLabel"] or None
+    item.status = data["status"]
+    item.sortOrder = data["sortOrder"]
+    item.startAt = data["startAt"]
+    item.endAt = data["endAt"]
+    item.payloadJson = json.dumps(data["payload"], ensure_ascii=False)
+    item.updatedAt = datetime.utcnow()
+    db.commit()
+    db.refresh(item)
+    return AdItemOut.model_validate(serialize_ad_item(item))
+
+
+@app.delete("/api/admin/ads/{ad_id}", response_model=DeleteResponse)
+def delete_ad_item(
+    ad_id: int,
+    _: dict = Depends(require_auth),
+    db: Session = Depends(get_db),
+) -> DeleteResponse:
+    item = db.query(AdItem).filter(AdItem.id == ad_id).first()
+    if not item:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+    db.delete(item)
+    db.commit()
+    return DeleteResponse(ok=True, deletedId=ad_id)
+
+
 @app.post("/api/admin/offers", response_model=OfferOut, status_code=status.HTTP_201_CREATED)
 def create_offer(
     payload: OfferWrite,
@@ -856,3 +1227,181 @@ def delete_page_config(
     db.delete(item)
     db.commit()
     return DeleteResponse(ok=True, deletedId=config_id)
+
+
+@app.get("/api/admin/dashboard", response_model=DashboardResponse)
+def admin_dashboard(_: dict = Depends(require_auth), db: Session = Depends(get_db)) -> DashboardResponse:
+    articles_total = db.query(Article).count()
+    projects = db.query(Project).all()
+    offers_total = db.query(Offer).count()
+    ads_total = db.query(AdItem).count()
+    site_configs_total = db.query(SiteConfig).count()
+    page_configs_total = db.query(PageConfig).count()
+    wishlist_items = db.query(WishlistItem).all()
+    community_leads = db.query(CommunityLead).all()
+    beta_applications = db.query(BetaApplication).all()
+
+    project_type_counts = {"product": 0, "game": 0, "lab": 0}
+    for item in projects:
+        if item.projectType in project_type_counts:
+            project_type_counts[item.projectType] += 1
+
+    wishlist_by_state: dict[str, int] = {}
+    wishlist_by_source: dict[str, int] = {}
+    wishlist_by_project: dict[str, int] = {}
+    for item in wishlist_items:
+        wishlist_by_state[item.wishState] = wishlist_by_state.get(item.wishState, 0) + 1
+        if item.sourcePage:
+            wishlist_by_source[item.sourcePage] = wishlist_by_source.get(item.sourcePage, 0) + 1
+        label = item.projectName or item.projectSlug or "未命名心愿"
+        wishlist_by_project[label] = wishlist_by_project.get(label, 0) + 1
+
+    leads_by_status: dict[str, int] = {}
+    leads_by_type: dict[str, int] = {}
+    for item in community_leads:
+        leads_by_status[item.status] = leads_by_status.get(item.status, 0) + 1
+        leads_by_type[item.leadType] = leads_by_type.get(item.leadType, 0) + 1
+
+    beta_by_status: dict[str, int] = {}
+    beta_by_role: dict[str, int] = {}
+    for item in beta_applications:
+        beta_by_status[item.status] = beta_by_status.get(item.status, 0) + 1
+        beta_by_role[item.roleType] = beta_by_role.get(item.roleType, 0) + 1
+
+    return DashboardResponse.model_validate(
+        {
+            "overview": {
+                "articles": articles_total,
+                "products": project_type_counts["product"],
+                "games": project_type_counts["game"],
+                "labs": project_type_counts["lab"],
+                "offers": offers_total,
+                "ads": ads_total,
+                "siteConfigs": site_configs_total,
+                "pageConfigs": page_configs_total,
+                "wishlistItems": len(wishlist_items),
+                "communityLeads": len(community_leads),
+                "betaApplications": len(beta_applications),
+                "userInteractions": len(wishlist_items) + len(community_leads) + len(beta_applications),
+            },
+            "wishlist": {
+                "byState": wishlist_by_state,
+                "bySource": wishlist_by_source,
+                "topProjects": sorted(
+                    [{"name": key, "count": value} for key, value in wishlist_by_project.items()],
+                    key=lambda item: item["count"],
+                    reverse=True,
+                )[:5],
+            },
+            "leads": {"byStatus": leads_by_status, "byType": leads_by_type},
+            "beta": {"byStatus": beta_by_status, "byRole": beta_by_role},
+        }
+    )
+
+
+@app.get("/api/admin/wishlist-items")
+def list_admin_wishlist_items(
+    wishState: str = Query(default=""),
+    sourcePage: str = Query(default=""),
+    _: dict = Depends(require_auth),
+    db: Session = Depends(get_db),
+) -> dict:
+    query = db.query(WishlistItem).order_by(WishlistItem.updatedAt.desc(), WishlistItem.id.desc())
+    if wishState.strip():
+        query = query.filter(WishlistItem.wishState == wishState.strip())
+    if sourcePage.strip():
+        query = query.filter(WishlistItem.sourcePage == sourcePage.strip())
+    items = [serialize_wishlist_item(item) for item in query.all()]
+    return {"items": items, "total": len(items)}
+
+
+@app.put("/api/admin/wishlist-items/{item_id}", response_model=WishlistOut)
+def update_admin_wishlist_item(
+    item_id: int,
+    payload: WishlistUpdate,
+    _: dict = Depends(require_auth),
+    db: Session = Depends(get_db),
+) -> WishlistOut:
+    item = db.query(WishlistItem).filter(WishlistItem.id == item_id).first()
+    if not item:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+    data = payload.model_dump()
+    item.wishState = data["wishState"].strip() or item.wishState
+    item.isActive = 1 if data["isActive"] else 0
+    item.contactType = data["contactType"].strip() or item.contactType
+    item.contactValue = data["contactValue"].strip() or item.contactValue
+    item.note = data["note"].strip() or item.note
+    item.updatedAt = datetime.utcnow()
+    db.commit()
+    db.refresh(item)
+    return WishlistOut.model_validate(serialize_wishlist_item(item))
+
+
+@app.get("/api/admin/community-leads")
+def list_admin_community_leads(
+    leadType: str = Query(default=""),
+    statusValue: str = Query(default=""),
+    _: dict = Depends(require_auth),
+    db: Session = Depends(get_db),
+) -> dict:
+    query = db.query(CommunityLead).order_by(CommunityLead.updatedAt.desc(), CommunityLead.id.desc())
+    if leadType.strip():
+        query = query.filter(CommunityLead.leadType == leadType.strip())
+    if statusValue.strip():
+        query = query.filter(CommunityLead.status == statusValue.strip())
+    items = [serialize_community_lead(item) for item in query.all()]
+    return {"items": items, "total": len(items)}
+
+
+@app.put("/api/admin/community-leads/{item_id}", response_model=CommunityLeadOut)
+def update_admin_community_lead(
+    item_id: int,
+    payload: CommunityLeadUpdate,
+    _: dict = Depends(require_auth),
+    db: Session = Depends(get_db),
+) -> CommunityLeadOut:
+    item = db.query(CommunityLead).filter(CommunityLead.id == item_id).first()
+    if not item:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+    data = payload.model_dump()
+    item.status = data["status"].strip() or item.status
+    item.message = data["message"].strip() or item.message
+    item.updatedAt = datetime.utcnow()
+    db.commit()
+    db.refresh(item)
+    return CommunityLeadOut.model_validate(serialize_community_lead(item))
+
+
+@app.get("/api/admin/beta-applications")
+def list_admin_beta_applications(
+    statusValue: str = Query(default=""),
+    roleType: str = Query(default=""),
+    _: dict = Depends(require_auth),
+    db: Session = Depends(get_db),
+) -> dict:
+    query = db.query(BetaApplication).order_by(BetaApplication.updatedAt.desc(), BetaApplication.id.desc())
+    if statusValue.strip():
+        query = query.filter(BetaApplication.status == statusValue.strip())
+    if roleType.strip():
+        query = query.filter(BetaApplication.roleType == roleType.strip())
+    items = [serialize_beta_application(item) for item in query.all()]
+    return {"items": items, "total": len(items)}
+
+
+@app.put("/api/admin/beta-applications/{item_id}", response_model=BetaApplicationOut)
+def update_admin_beta_application(
+    item_id: int,
+    payload: BetaApplicationUpdate,
+    _: dict = Depends(require_auth),
+    db: Session = Depends(get_db),
+) -> BetaApplicationOut:
+    item = db.query(BetaApplication).filter(BetaApplication.id == item_id).first()
+    if not item:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+    data = payload.model_dump()
+    item.status = data["status"].strip() or item.status
+    item.followUpNote = data["followUpNote"].strip() or item.followUpNote
+    item.updatedAt = datetime.utcnow()
+    db.commit()
+    db.refresh(item)
+    return BetaApplicationOut.model_validate(serialize_beta_application(item))
