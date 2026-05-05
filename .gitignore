@@ -11,6 +11,7 @@ __pycache__/
 venv/
 env/
 ENV/
+node_modules/
 
 # Local databases
 data/*.db
@@ -33,6 +34,7 @@ site/
 *.egg-info/
 .eggs/
 pip-wheel-metadata/
+admin-template/
 
 # IDE and editor files
 .idea/
@@ -46,3 +48,6 @@ pip-wheel-metadata/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Package manager leftovers
+package-lock.json

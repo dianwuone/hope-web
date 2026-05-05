@@ -74,6 +74,57 @@ class PageConfig(Base):
     updatedAt = Column(DateTime(timezone=False), nullable=False)
 
 
+class Project(Base):
+    __tablename__ = "projects"
+
+    id = Column(Integer, primary_key=True, index=True)
+    slug = Column(String(120), nullable=False, unique=True, index=True)
+    name = Column(String(120), nullable=False)
+    projectType = Column(String(20), nullable=False)
+    title = Column(String(200), nullable=True)
+    subtitle = Column(Text, nullable=True)
+    shortDesc = Column(Text, nullable=True)
+    summary = Column(Text, nullable=True)
+    description = Column(Text, nullable=True)
+    coverImage = Column(String(255), nullable=False, default="")
+    bannerImage = Column(String(255), nullable=False, default="")
+    status = Column(String(30), nullable=False, default="draft")
+    stage = Column(String(30), nullable=True)
+    supportStatus = Column(String(30), nullable=True)
+    price = Column(String(30), nullable=True)
+    originalPrice = Column(String(30), nullable=True)
+    tagsJson = Column(Text, nullable=False, default="[]")
+    featuresJson = Column(Text, nullable=False, default="[]")
+    highlightsJson = Column(Text, nullable=False, default="[]")
+    faqJson = Column(Text, nullable=False, default="[]")
+    testimonialsJson = Column(Text, nullable=False, default="[]")
+    extraJson = Column(Text, nullable=False, default="{}")
+    createdAt = Column(DateTime(timezone=False), nullable=False)
+    updatedAt = Column(DateTime(timezone=False), nullable=False)
+
+
+class Offer(Base):
+    __tablename__ = "offers"
+
+    id = Column(Integer, primary_key=True, index=True)
+    slug = Column(String(120), nullable=False, unique=True, index=True)
+    title = Column(String(200), nullable=False)
+    subtitle = Column(Text, nullable=False)
+    category = Column(String(50), nullable=True)
+    status = Column(String(50), nullable=True)
+    statusTone = Column(String(30), nullable=True)
+    price = Column(String(30), nullable=False)
+    originalPrice = Column(String(30), nullable=True)
+    bannerImage = Column(String(255), nullable=False, default="")
+    summary = Column(Text, nullable=True)
+    ctaLabel = Column(String(50), nullable=True)
+    benefitsJson = Column(Text, nullable=False, default="[]")
+    metaJson = Column(Text, nullable=False, default="[]")
+    extraJson = Column(Text, nullable=False, default="{}")
+    createdAt = Column(DateTime(timezone=False), nullable=False)
+    updatedAt = Column(DateTime(timezone=False), nullable=False)
+
+
 class Article(Base):
     __tablename__ = "articles"
 

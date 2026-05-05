@@ -129,3 +129,91 @@ class PageConfigOut(ApiModel):
     status: str
     remark: str | None = None
     updatedAt: datetime
+
+
+class ProjectWrite(BaseModel):
+    slug: str
+    name: str
+    projectType: str
+    title: str = ""
+    subtitle: str = ""
+    shortDesc: str = ""
+    summary: str = ""
+    description: str = ""
+    coverImage: str = ""
+    bannerImage: str = ""
+    status: str = "draft"
+    stage: str = ""
+    supportStatus: str = ""
+    price: str = ""
+    originalPrice: str = ""
+    tags: list = Field(default_factory=list)
+    features: list = Field(default_factory=list)
+    highlights: list = Field(default_factory=list)
+    faq: list = Field(default_factory=list)
+    testimonials: list = Field(default_factory=list)
+    extra: dict = Field(default_factory=dict)
+
+
+class OfferWrite(BaseModel):
+    slug: str
+    title: str
+    subtitle: str
+    category: str = ""
+    status: str = ""
+    statusTone: str = ""
+    price: str
+    originalPrice: str = ""
+    bannerImage: str = ""
+    summary: str = ""
+    ctaLabel: str = ""
+    benefits: list = Field(default_factory=list)
+    meta: list = Field(default_factory=list)
+    extra: dict = Field(default_factory=dict)
+
+
+class ProjectOut(ApiModel):
+    id: int
+    slug: str
+    name: str
+    projectType: str
+    title: str | None = None
+    subtitle: str | None = None
+    shortDesc: str | None = None
+    summary: str | None = None
+    description: str | None = None
+    coverImage: str
+    bannerImage: str
+    status: str
+    stage: str | None = None
+    supportStatus: str | None = None
+    price: str | None = None
+    originalPrice: str | None = None
+    tags: list = Field(default_factory=list)
+    features: list = Field(default_factory=list)
+    highlights: list = Field(default_factory=list)
+    faq: list = Field(default_factory=list)
+    testimonials: list = Field(default_factory=list)
+    extra: dict = Field(default_factory=dict)
+    createdAt: datetime
+    updatedAt: datetime
+
+
+class OfferOut(ApiModel):
+    id: int
+    slug: str
+    title: str
+    subtitle: str
+    category: str | None = None
+    status: str | None = None
+    statusTone: str | None = None
+    price: str
+    originalPrice: str | None = None
+    bannerImage: str
+    summary: str | None = None
+    ctaLabel: str | None = None
+    benefits: list = Field(default_factory=list)
+    meta: list = Field(default_factory=list)
+    extra: dict = Field(default_factory=dict)
+    createdAt: datetime
+    updatedAt: datetime
