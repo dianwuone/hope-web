@@ -160,6 +160,18 @@ def parse_json_dict(value: str) -> dict:
         return {}
 
 
+def parse_config_value(value: str, fallback):
+    parsed = parse_json_dict(value)
+    if parsed:
+        if isinstance(parsed, dict) and set(parsed.keys()) == {"value"}:
+            return parsed["value"]
+        return parsed
+    parsed_list = parse_json_list(value)
+    if parsed_list:
+        return parsed_list
+    return fallback
+
+
 def serialize_project(item: Project) -> dict:
     return {
         "id": item.id,
@@ -625,6 +637,42 @@ def list_ads(
     ]
     serialized = [serialize_ad_item(item) for item in items]
     return {"items": serialized, "total": len(serialized)}
+
+
+@app.get("/api/bootstrap")
+def bootstrap(db: Session = Depends(get_db)) -> dict:
+    page_configs = db.query(PageConfig).order_by(PageConfig.pageKey.asc()).all()
+    site_configs = {item.configKey: item for item in db.query(SiteConfig).all()}
+    active_ads = list_ads(db=db)["items"]
+    columns = [serialize_column(item) for item in db.query(ContentCategory).order_by(ContentCategory.sortOrder.asc(), ContentCategory.id.asc()).all()]
+    tags = [serialize_tag(item) for item in db.query(ContentTag).order_by(ContentTag.id.asc()).all()]
+    articles = [
+        serialize_article(item)
+        for item in db.query(Article).options(joinedload(Article.column), joinedload(Article.tags)).order_by(Article.publishedAt.desc(), Article.id.desc()).all()
+    ]
+    projects = [serialize_project(item) for item in db.query(Project).order_by(Project.id.asc()).all()]
+    offers = [serialize_offer(item) for item in db.query(Offer).order_by(Offer.id.asc()).all()]
+
+    return {
+        "site": {
+            "siteMeta": parse_config_value(site_configs.get("site_meta").configValue if site_configs.get("site_meta") else "", {}),
+            "mainNav": parse_config_value(site_configs.get("main_nav").configValue if site_configs.get("main_nav") else "", []),
+            "footerSections": parse_config_value(site_configs.get("footer_sections").configValue if site_configs.get("footer_sections") else "", []),
+            "socialLinks": parse_config_value(site_configs.get("social_links").configValue if site_configs.get("social_links") else "", []),
+            "articleCategories": parse_config_value(site_configs.get("article_categories").configValue if site_configs.get("article_categories") else "", []),
+            "articleHotTopics": parse_config_value(site_configs.get("article_hot_topics").configValue if site_configs.get("article_hot_topics") else "", []),
+        },
+        "pages": {item.pageKey: parse_json_dict(item.configJson) for item in page_configs},
+        "content": {
+            "columns": columns,
+            "tags": tags,
+            "articles": articles,
+            "projects": projects,
+            "offers": offers,
+            "ads": active_ads,
+        },
+        "pageConfigs": [serialize_page_config(item) for item in page_configs],
+    }
 
 
 @app.get("/api/page-configs/{page_key}", response_model=PageConfigOut)

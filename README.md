@@ -91,12 +91,15 @@ cd backend
 8. `GET /api/projects/:slug`
 9. `GET /api/offers`
 10. `GET /api/offers/:slug`
+11. `GET /api/bootstrap`
 
 `GET /api/articles` 支持：
 
 - `q`：关键词搜索
 - `column`：按栏目 slug 过滤
 - `tag`：按标签 slug 或名称过滤
+
+`GET /api/bootstrap` 会一次性返回站点公共配置、页面配置和核心内容列表，适合用户前端的全局初始化与菜单渲染。
 
 ### 后台管理接口
 
