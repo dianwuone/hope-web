@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime
+import re
 
 from fastapi import Depends, FastAPI, HTTPException, Query, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -53,6 +54,7 @@ from .schemas import (
     WishlistUpdate,
     WishlistWrite,
 )
+from .timeutils import current_time, current_timestamp_ms
 from .seed import seed_if_empty
 
 
@@ -172,6 +174,23 @@ def parse_config_value(value: str, fallback):
     return fallback
 
 
+EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
+PHONE_RE = re.compile(r"^\+?[0-9][0-9\s-]{6,18}[0-9]$")
+WECHAT_RE = re.compile(r"^[a-zA-Z][-_a-zA-Z0-9]{5,19}$")
+
+
+def validate_contact_value(contact_type: str, contact_value: str) -> None:
+    value = contact_value.strip()
+    if not value:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="联系方式不能为空")
+    if contact_type == "email" and not EMAIL_RE.match(value):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="邮箱格式不正确")
+    if contact_type == "phone" and not PHONE_RE.match(value):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="电话号码格式不正确")
+    if contact_type == "wechat" and not WECHAT_RE.match(value):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="微信号格式不正确")
+
+
 def serialize_project(item: Project) -> dict:
     return {
         "id": item.id,
@@ -259,6 +278,21 @@ def serialize_wishlist_item(item: WishlistItem) -> dict:
         "createdAt": item.createdAt,
         "updatedAt": item.updatedAt,
     }
+
+
+def fetch_active_ads(db: Session, page_key: str = "", slot_key: str = "") -> list[dict]:
+    now = datetime.utcnow()
+    query = db.query(AdItem).order_by(AdItem.sortOrder.asc(), AdItem.id.asc()).filter(AdItem.status == "active")
+    if page_key.strip():
+        query = query.filter((AdItem.pageKey == page_key.strip()) | (AdItem.pageKey.is_(None)))
+    if slot_key.strip():
+        query = query.filter(AdItem.slotKey == slot_key.strip())
+    items = [
+        item
+        for item in query.all()
+        if (item.startAt is None or item.startAt <= now) and (item.endAt is None or item.endAt >= now)
+    ]
+    return [serialize_ad_item(item) for item in items]
 
 
 def serialize_community_lead(item: CommunityLead) -> dict:
@@ -412,7 +446,7 @@ def sanitize_ad_item_input(payload: AdItemWrite) -> dict:
 
 def sanitize_wishlist_input(payload: WishlistWrite) -> dict:
     data = payload.model_dump()
-    data["visitorId"] = data["visitorId"].strip() or f"guest-{int(datetime.utcnow().timestamp() * 1000)}"
+    data["visitorId"] = data["visitorId"].strip() or f"guest-{current_timestamp_ms()}"
     data["projectSlug"] = data["projectSlug"].strip()
     data["projectName"] = data["projectName"].strip()
     data["category"] = data["category"].strip()
@@ -423,6 +457,7 @@ def sanitize_wishlist_input(payload: WishlistWrite) -> dict:
     data["note"] = data["note"].strip()
     if not data["projectSlug"] and not data["projectName"]:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="projectSlug 或 projectName 至少填写一个")
+    validate_contact_value(data["contactType"] or "wechat", data["contactValue"])
     return data
 
 
@@ -434,8 +469,7 @@ def sanitize_community_lead_input(payload: CommunityLeadWrite) -> dict:
     data["contactType"] = data["contactType"].strip() or "wechat"
     data["contactValue"] = data["contactValue"].strip()
     data["message"] = data["message"].strip()
-    if not data["contactValue"]:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="联系方式不能为空")
+    validate_contact_value(data["contactType"], data["contactValue"])
     return data
 
 
@@ -452,6 +486,7 @@ def sanitize_beta_application_input(payload: BetaApplicationWrite) -> dict:
     data["status"] = data["status"].strip() or "pending"
     if not data["name"] or not data["contactValue"]:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="姓名和联系方式不能为空")
+    validate_contact_value(data["contactType"], data["contactValue"])
     return data
 
 
@@ -624,18 +659,7 @@ def list_ads(
     slotKey: str = Query(default=""),
     db: Session = Depends(get_db),
 ) -> dict:
-    now = datetime.utcnow()
-    query = db.query(AdItem).order_by(AdItem.sortOrder.asc(), AdItem.id.asc()).filter(AdItem.status == "active")
-    if pageKey.strip():
-        query = query.filter((AdItem.pageKey == pageKey.strip()) | (AdItem.pageKey.is_(None)))
-    if slotKey.strip():
-        query = query.filter(AdItem.slotKey == slotKey.strip())
-    items = [
-        item
-        for item in query.all()
-        if (item.startAt is None or item.startAt <= now) and (item.endAt is None or item.endAt >= now)
-    ]
-    serialized = [serialize_ad_item(item) for item in items]
+    serialized = fetch_active_ads(db, pageKey=pageKey, slot_key=slotKey)
     return {"items": serialized, "total": len(serialized)}
 
 
@@ -643,7 +667,7 @@ def list_ads(
 def bootstrap(db: Session = Depends(get_db)) -> dict:
     page_configs = db.query(PageConfig).order_by(PageConfig.pageKey.asc()).all()
     site_configs = {item.configKey: item for item in db.query(SiteConfig).all()}
-    active_ads = list_ads(db=db)["items"]
+    active_ads = fetch_active_ads(db)
     columns = [serialize_column(item) for item in db.query(ContentCategory).order_by(ContentCategory.sortOrder.asc(), ContentCategory.id.asc()).all()]
     tags = [serialize_tag(item) for item in db.query(ContentTag).order_by(ContentTag.id.asc()).all()]
     articles = [
@@ -686,7 +710,7 @@ def get_page_config(page_key: str, db: Session = Depends(get_db)) -> PageConfigO
 @app.post("/api/wishlist", response_model=WishlistOut, status_code=status.HTTP_201_CREATED)
 def create_wishlist_item(payload: WishlistWrite, db: Session = Depends(get_db)) -> WishlistOut:
     data = sanitize_wishlist_input(payload)
-    now = datetime.utcnow()
+    now = current_time()
     item = WishlistItem(
         visitorId=data["visitorId"],
         projectSlug=data["projectSlug"] or None,
@@ -723,7 +747,7 @@ def wishlist_summary(visitorId: str = Query(default=""), db: Session = Depends(g
 @app.post("/api/community-leads", response_model=CommunityLeadOut, status_code=status.HTTP_201_CREATED)
 def create_community_lead(payload: CommunityLeadWrite, db: Session = Depends(get_db)) -> CommunityLeadOut:
     data = sanitize_community_lead_input(payload)
-    now = datetime.utcnow()
+    now = current_time()
     item = CommunityLead(
         leadType=data["leadType"],
         intentReason=data["intentReason"],
@@ -744,7 +768,7 @@ def create_community_lead(payload: CommunityLeadWrite, db: Session = Depends(get
 @app.post("/api/beta-applications", response_model=BetaApplicationOut, status_code=status.HTTP_201_CREATED)
 def create_beta_application(payload: BetaApplicationWrite, db: Session = Depends(get_db)) -> BetaApplicationOut:
     data = sanitize_beta_application_input(payload)
-    now = datetime.utcnow()
+    now = current_time()
     item = BetaApplication(
         projectSlug=data["projectSlug"] or None,
         sourcePage=data["sourcePage"],

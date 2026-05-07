@@ -181,3 +181,33 @@ $env:DATABASE_URL='postgresql+psycopg://user:password@host:5432/quentin_window'
 3. 增加 Alembic 迁移
 4. 接入 `projects`、报名、心愿单
 5. 让前端 `src/api/index.js` 优先接入文章读取接口
+
+## 自动部署
+
+如果你把 `backend/` 推到第三方 GitHub 仓库，并希望服务器每天自动拉取最新代码并部署，可以直接使用：
+
+```bash
+bash deploy.sh
+```
+
+这个脚本会做这些事：
+
+1. `git fetch` + `reset --hard` 到指定分支
+2. 更新 Python 依赖
+3. 构建 `backend/admin`
+4. 重启后端服务（如果你配置了服务名或自定义命令）
+
+### 推荐 cron
+
+每天凌晨 3 点执行一次：
+
+```cron
+0 3 * * * cd /www/wwwroot/code/kuntin/backend && bash deploy.sh >> /www/wwwroot/code/kuntin/backend/deploy.log 2>&1
+```
+
+### 可选环境变量
+
+1. `BRANCH`：默认 `main`
+2. `PYTHON_BIN`：默认 `python3`
+3. `BACKEND_SERVICE_NAME`：例如 `quentin-window-backend`
+4. `RESTART_CMD`：自定义重启命令，优先于服务名

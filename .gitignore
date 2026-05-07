@@ -35,6 +35,8 @@ site/
 .eggs/
 pip-wheel-metadata/
 admin-template/
+admin/dist/
+deploy.log
 
 # IDE and editor files
 .idea/

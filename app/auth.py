@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from datetime import datetime
 from secrets import token_urlsafe
 
 from fastapi import Header, HTTPException, status
 from sqlalchemy.orm import Session
 
 from .models import AdminUser
+from .timeutils import current_time
 
 
 sessions: dict[str, dict] = {}
@@ -31,7 +31,7 @@ def login(username: str, password: str, db: Session) -> dict:
         "username": user.username,
         "displayName": user.displayName,
         "role": user.role,
-        "loginAt": datetime.utcnow(),
+        "loginAt": current_time(),
     }
     return {"token": token, "user": sessions[token]}
 
