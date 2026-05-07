@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+APP_DIR="${APP_DIR:-/www/wwwroot/kuntin}"
 BRANCH="${BRANCH:-main}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 RESTART_CMD="${RESTART_CMD:-}"
 BACKEND_SERVICE_NAME="${BACKEND_SERVICE_NAME:-}"
+REPO_URL="${REPO_URL:-}"
 
 log() {
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"
@@ -41,6 +43,16 @@ restart_backend() {
 }
 
 log "开始后端自动部署"
+
+if [[ ! -d "$APP_DIR/.git" ]]; then
+  if [[ -z "$REPO_URL" ]]; then
+    fail "未找到 Git 仓库目录: $APP_DIR，请先执行 git init 并设置远程仓库"
+  fi
+  log "初始化部署仓库: $APP_DIR"
+  mkdir -p "$APP_DIR"
+  git -C "$APP_DIR" init
+  git -C "$APP_DIR" remote add origin "$REPO_URL"
+fi
 
 cd "$APP_DIR"
 

@@ -21,7 +21,7 @@
 
 1. 文档里明确建议优先从 `articles`、`content_categories`、`content_tags` 开始
 2. 当前前端 `src/api/index.js` 还在用假请求，文章数据最容易先替换成真实接口
-3. 先用 SQLite 跑通“后台管理 -> 数据落盘 -> 前台读取”的闭环，再平滑切 PostgreSQL
+3. 先用 SQLite 跑通“后台管理 -> 数据落盘 -> 前台读取”的闭环，并继续以 SQLite 作为生产数据库
 
 ## 目录结构
 
@@ -133,11 +133,12 @@ cd backend
 
 1. 开发环境默认使用 `SQLite`，数据库文件是 `backend/data/app.db`
 2. 首次启动时会从 `backend/data/content.json` 导入种子数据
-3. 生产环境可通过 `DATABASE_URL` 切换到 `PostgreSQL`
-4. `site_configs` 用于全站通用配置
-5. `page_configs` 用于页面级 JSON 配置
-6. `projects` 用于承接 `hope/src/data/products/products.js` 与 `hope/src/data/lab/labs.js`
-7. `offers` 用于承接 `hope/src/data/products/products.js` 中的 `tryOffers`
+3. 生产环境继续使用 SQLite，数据库文件默认是 `backend/data/app.db`
+4. 可通过 `SQLITE_DB_PATH` 指定数据库文件路径
+5. `site_configs` 用于全站通用配置
+6. `page_configs` 用于页面级 JSON 配置
+7. `projects` 用于承接 `hope/src/data/products/products.js` 与 `hope/src/data/lab/labs.js`
+8. `offers` 用于承接 `hope/src/data/products/products.js` 中的 `tryOffers`
 
 ## 当前已收敛的 hope 模拟数据
 
@@ -162,7 +163,7 @@ cd backend
 例如：
 
 ```bash
-$env:DATABASE_URL='postgresql+psycopg://user:password@host:5432/quentin_window'
+$env:SQLITE_DB_PATH='D:\code\AI\kuntin\backend\data\app.db'
 ```
 
 后续扩展时，优先顺序建议保持和规划文档一致：
