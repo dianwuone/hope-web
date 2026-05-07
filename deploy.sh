@@ -10,6 +10,12 @@ BACKEND_SERVICE_NAME="${BACKEND_SERVICE_NAME:-}"
 REPO_URL="${REPO_URL:-}"
 DEPLOY_PYTHON=""
 PNPM_RUNNER="pnpm"
+PYTHON_DEP_HASH_FILE="$APP_DIR/.venv/.deploy-requirements.sha256"
+ADMIN_DEP_HASH_FILE="$APP_DIR/admin/.deploy-deps.sha256"
+PNPM_FETCH_TIMEOUT="${PNPM_FETCH_TIMEOUT:-600000}"
+PNPM_FETCH_RETRIES="${PNPM_FETCH_RETRIES:-10}"
+PNPM_NETWORK_CONCURRENCY="${PNPM_NETWORK_CONCURRENCY:-1}"
+PNPM_REGISTRY="${PNPM_REGISTRY:-https://registry.npmmirror.com}"
 
 log() {
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"
@@ -118,6 +124,48 @@ ensure_pip_available() {
   fail "当前 Python 环境没有 pip，请安装 python3-pip，或删除 .venv 后重新执行"
 }
 
+calc_python_dep_hash() {
+  if [[ -f "$APP_DIR/requirements.txt" ]]; then
+    sha256sum "$APP_DIR/requirements.txt" | awk '{print $1}'
+    return
+  fi
+  echo ""
+}
+
+calc_admin_dep_hash() {
+  if [[ -f "$APP_DIR/admin/package.json" && -f "$APP_DIR/admin/pnpm-lock.yaml" ]]; then
+    sha256sum "$APP_DIR/admin/package.json" "$APP_DIR/admin/pnpm-lock.yaml" | sha256sum | awk '{print $1}'
+    return
+  fi
+  echo ""
+}
+
+ensure_python_deps() {
+  local current_python_dep_hash cached_python_dep_hash
+  current_python_dep_hash="$(calc_python_dep_hash)"
+  cached_python_dep_hash=""
+  if [[ -f "$PYTHON_DEP_HASH_FILE" ]]; then
+    cached_python_dep_hash="$(tr -d '\r\n' < "$PYTHON_DEP_HASH_FILE")"
+  fi
+
+  if [[ -x "$APP_DIR/.venv/bin/python" && "$current_python_dep_hash" == "$cached_python_dep_hash" ]]; then
+    log "后端依赖未变化，跳过 pip install"
+    DEPLOY_PYTHON="$APP_DIR/.venv/bin/python"
+    return
+  fi
+
+  resolve_python_runtime
+  ensure_pip_available
+
+  log "安装 Python 依赖"
+  "$DEPLOY_PYTHON" -m pip install --upgrade pip
+  "$DEPLOY_PYTHON" -m pip install -r "$APP_DIR/requirements.txt"
+
+  if [[ -x "$APP_DIR/.venv/bin/python" ]]; then
+    printf '%s\n' "$current_python_dep_hash" > "$PYTHON_DEP_HASH_FILE"
+  fi
+}
+
 log "开始后端自动部署"
 
 if [[ ! -d "$APP_DIR/.git" ]]; then
@@ -143,20 +191,33 @@ if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
   fail "未找到 Python 命令: $PYTHON_BIN"
 fi
 
-resolve_python_runtime
-
-ensure_pip_available
-
-log "安装 Python 依赖"
-"$DEPLOY_PYTHON" -m pip install --upgrade pip
-"$DEPLOY_PYTHON" -m pip install -r "$APP_DIR/requirements.txt"
+ensure_python_deps
 
 if [[ -f "$APP_DIR/admin/package.json" ]]; then
   log "构建管理前端"
   resolve_pnpm_runner
   cd "$APP_DIR/admin"
-  CI=true $PNPM_RUNNER install --frozen-lockfile --config.confirmModulesPurge=false
-  CI=true $PNPM_RUNNER build
+  current_admin_dep_hash="$(calc_admin_dep_hash)"
+  cached_admin_dep_hash=""
+  if [[ -f "$ADMIN_DEP_HASH_FILE" ]]; then
+    cached_admin_dep_hash="$(tr -d '\r\n' < "$ADMIN_DEP_HASH_FILE")"
+  fi
+
+  if [[ ! -d "$APP_DIR/admin/node_modules" || "$current_admin_dep_hash" != "$cached_admin_dep_hash" ]]; then
+    log "安装管理前端依赖"
+    HUSKY=0 CI=true $PNPM_RUNNER install \
+      --frozen-lockfile \
+      --config.confirmModulesPurge=false \
+      --fetch-timeout "$PNPM_FETCH_TIMEOUT" \
+      --fetch-retries "$PNPM_FETCH_RETRIES" \
+      --network-concurrency "$PNPM_NETWORK_CONCURRENCY" \
+      --registry "$PNPM_REGISTRY"
+    printf '%s\n' "$current_admin_dep_hash" > "$ADMIN_DEP_HASH_FILE"
+  else
+    log "管理前端依赖未变化，跳过 pnpm install"
+  fi
+
+  HUSKY=0 CI=true VITE_DEPLOY_MODE=server VITE_CDN=false $PNPM_RUNNER build
   cd "$APP_DIR"
 fi
 

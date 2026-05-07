@@ -194,9 +194,36 @@ bash deploy.sh
 这个脚本会做这些事：
 
 1. `git fetch` + `reset --hard` 到指定分支
-2. 更新 Python 依赖
+2. 按依赖清单判断是否需要更新 Python / 前端依赖
 3. 构建 `backend/admin`
 4. 重启后端服务（如果你配置了服务名或自定义命令）
+
+### 终端预安装建议
+
+首次在服务器终端手动执行一次依赖安装会更稳：
+
+```bash
+cd /www/wwwroot/kuntin
+python3 -m venv .venv
+./.venv/bin/pip install -r requirements.txt
+cd admin
+pnpm install --frozen-lockfile
+```
+
+之后自动部署脚本会根据 `requirements.txt`、`package.json` 和 `pnpm-lock.yaml` 的哈希判断是否需要重新安装。
+
+如果前端依赖下载太慢，可以在终端先执行一次更稳的安装：
+
+```bash
+cd /www/wwwroot/kuntin/admin
+pnpm install --frozen-lockfile --fetch-timeout 600000 --fetch-retries 10 --network-concurrency 1 --registry https://registry.npmmirror.com
+```
+
+服务器自动构建建议使用服务器部署模式：
+
+```bash
+HUSKY=0 VITE_DEPLOY_MODE=server pnpm build
+```
 
 ### 推荐 cron
 
