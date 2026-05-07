@@ -88,7 +88,7 @@ DEFAULT_SITE_CONFIGS = [
             [
                 {"name": "GitHub", "href": "#"},
                 {"name": "微信", "href": "#"},
-                {"name": "Email", "href": "mailto:hello@example.com"},
+                {"name": "Email", "href": ""},
             ],
             ensure_ascii=False,
         ),
@@ -224,7 +224,7 @@ DEFAULT_PAGE_CONFIGS = [
                 "subtitle": "这里是 QUENTIN WINDOW 的私人社区入口。",
                 "eyebrow": "欢迎来到昆廷的窗口",
                 "authorName": "Quentin",
-                "qrLabel": "微信号：quentin_window",
+                "qrLabel": "",
             },
             ensure_ascii=False,
             indent=2,

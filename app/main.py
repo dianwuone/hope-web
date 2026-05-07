@@ -685,6 +685,8 @@ def bootstrap(db: Session = Depends(get_db)) -> dict:
             "socialLinks": parse_config_value(site_configs.get("social_links").configValue if site_configs.get("social_links") else "", []),
             "articleCategories": parse_config_value(site_configs.get("article_categories").configValue if site_configs.get("article_categories") else "", []),
             "articleHotTopics": parse_config_value(site_configs.get("article_hot_topics").configValue if site_configs.get("article_hot_topics") else "", []),
+            "contactEmail": parse_config_value(site_configs.get("contact_email").configValue if site_configs.get("contact_email") else "", ""),
+            "communityWechat": parse_config_value(site_configs.get("community_wechat").configValue if site_configs.get("community_wechat") else "", ""),
         },
         "pages": {item.pageKey: parse_json_dict(item.configJson) for item in page_configs},
         "content": {
