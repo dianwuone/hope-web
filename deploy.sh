@@ -18,6 +18,13 @@ fail() {
   exit 1
 }
 
+ensure_git_safe_directory() {
+  if ! git config --global --get-all safe.directory | grep -Fxq "$APP_DIR"; then
+    log "登记 Git 安全目录: $APP_DIR"
+    git config --global --add safe.directory "$APP_DIR"
+  fi
+}
+
 restart_backend() {
   if [[ -n "$RESTART_CMD" ]]; then
     log "执行自定义重启命令"
@@ -53,6 +60,8 @@ if [[ ! -d "$APP_DIR/.git" ]]; then
   git -C "$APP_DIR" init
   git -C "$APP_DIR" remote add origin "$REPO_URL"
 fi
+
+ensure_git_safe_directory
 
 cd "$APP_DIR"
 
