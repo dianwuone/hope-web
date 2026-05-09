@@ -37,6 +37,7 @@ pip-wheel-metadata/
 admin-template/
 admin/dist/
 deploy.log
+.deploy-state/
 
 # IDE and editor files
 .idea/

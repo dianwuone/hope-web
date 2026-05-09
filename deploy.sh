@@ -8,10 +8,11 @@ PYTHON_BIN="${PYTHON_BIN:-python3}"
 RESTART_CMD="${RESTART_CMD:-}"
 BACKEND_SERVICE_NAME="${BACKEND_SERVICE_NAME:-}"
 REPO_URL="${REPO_URL:-}"
+DEPLOY_STATE_DIR="${DEPLOY_STATE_DIR:-$APP_DIR/.deploy-state}"
 DEPLOY_PYTHON=""
 PNPM_RUNNER="pnpm"
-PYTHON_DEP_HASH_FILE="$APP_DIR/.venv/.deploy-requirements.sha256"
-ADMIN_DEP_HASH_FILE="$APP_DIR/admin/.deploy-deps.sha256"
+PYTHON_DEP_HASH_FILE="$DEPLOY_STATE_DIR/requirements.sha256"
+ADMIN_DEP_HASH_FILE="$DEPLOY_STATE_DIR/admin-deps.sha256"
 PNPM_FETCH_TIMEOUT="${PNPM_FETCH_TIMEOUT:-600000}"
 PNPM_FETCH_RETRIES="${PNPM_FETCH_RETRIES:-10}"
 PNPM_NETWORK_CONCURRENCY="${PNPM_NETWORK_CONCURRENCY:-1}"
@@ -24,6 +25,24 @@ log() {
 fail() {
   echo "❌ $1" >&2
   exit 1
+}
+
+prepare_deploy_environment() {
+  mkdir -p "$DEPLOY_STATE_DIR"
+
+  if [[ -z "${HOME:-}" ]]; then
+    export HOME="$DEPLOY_STATE_DIR/home"
+    mkdir -p "$HOME"
+    log "当前环境未设置 HOME，临时使用: $HOME"
+  fi
+
+  if [[ ! -f "$PYTHON_DEP_HASH_FILE" && -f "$APP_DIR/.venv/.deploy-requirements.sha256" ]]; then
+    cp "$APP_DIR/.venv/.deploy-requirements.sha256" "$PYTHON_DEP_HASH_FILE"
+  fi
+
+  if [[ ! -f "$ADMIN_DEP_HASH_FILE" && -f "$APP_DIR/admin/.deploy-deps.sha256" ]]; then
+    cp "$APP_DIR/admin/.deploy-deps.sha256" "$ADMIN_DEP_HASH_FILE"
+  fi
 }
 
 ensure_git_safe_directory() {
@@ -167,6 +186,7 @@ ensure_python_deps() {
 }
 
 log "开始后端自动部署"
+prepare_deploy_environment
 
 if [[ ! -d "$APP_DIR/.git" ]]; then
   if [[ -z "$REPO_URL" ]]; then

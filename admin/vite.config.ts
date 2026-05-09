@@ -11,7 +11,7 @@ import {
 
 export default async ({ mode }: ConfigEnv): Promise<UserConfigExport> => {
   const { VITE_CDN, VITE_PORT, VITE_COMPRESSION, VITE_PUBLIC_PATH, VITE_DEPLOY_MODE } =
-    wrapperEnv(loadEnv(mode, root));
+    wrapperEnv({ ...loadEnv(mode, root), ...process.env });
   const isServerDeploy = VITE_DEPLOY_MODE === "server";
   return {
     base: VITE_PUBLIC_PATH,
