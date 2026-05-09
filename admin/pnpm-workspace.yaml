@@ -1,0 +1,13 @@
+packages:
+  - "."
+
+strictDepBuilds: false
+
+allowBuilds:
+  "@parcel/watcher": true
+  "@tailwindcss/oxide": false
+  core-js: true
+  es5-ext: true
+  esbuild: true
+  typeit: true
+  vue-demi: true

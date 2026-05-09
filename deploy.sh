@@ -228,6 +228,8 @@ if [[ -f "$APP_DIR/admin/package.json" ]]; then
     HUSKY=0 CI=true $PNPM_RUNNER install \
       --frozen-lockfile \
       --config.confirmModulesPurge=false \
+      --config.enable-pre-post-scripts=false \
+      --config.strict-dep-builds=false \
       --fetch-timeout "$PNPM_FETCH_TIMEOUT" \
       --fetch-retries "$PNPM_FETCH_RETRIES" \
       --network-concurrency "$PNPM_NETWORK_CONCURRENCY" \
