@@ -185,11 +185,16 @@ $env:SQLITE_DB_PATH='D:\code\AI\kuntin\backend\data\app.db'
 
 ## 自动部署
 
-如果你把 `backend/` 推到第三方 GitHub 仓库，并希望服务器每天自动拉取最新代码并部署，可以直接使用：
+如果你把 `backend/` 推到第三方 GitHub 仓库，并希望服务器每天自动拉取最新代码并部署，推荐把脚本复制到运行仓库外面：
 
 ```bash
-bash deploy.sh
+mkdir -p /www/wwwroot/code/backend
+cp deploy.sh /www/wwwroot/code/backend/deploy.sh
+chmod +x /www/wwwroot/code/backend/deploy.sh
+bash /www/wwwroot/code/backend/deploy.sh
 ```
+
+脚本默认把 `/www/wwwroot/kuntin` 当作后端运行目录。这个目录本身应该是 Git 仓库，里面包含 `app/`、`admin/`、`requirements.txt` 等后端文件。
 
 这个脚本会做这些事：
 
@@ -200,17 +205,13 @@ bash deploy.sh
 
 ### 终端预安装建议
 
-首次在服务器终端手动执行一次依赖安装会更稳：
+首次部署或怀疑依赖不完整时，直接强制跑一次部署脚本即可：
 
 ```bash
-cd /www/wwwroot/kuntin
-python3 -m venv .venv
-./.venv/bin/pip install -r requirements.txt
-cd admin
-pnpm install --frozen-lockfile
+FORCE_INSTALL_DEPS=1 bash /www/wwwroot/code/backend/deploy.sh
 ```
 
-之后自动部署脚本会根据 `requirements.txt`、`package.json` 和 `pnpm-lock.yaml` 的哈希判断是否需要重新安装。
+之后自动部署脚本会根据 `requirements.txt`、`package.json` 和 `pnpm-lock.yaml` 的哈希判断是否需要重新安装。即使哈希相同，脚本也会检查关键 Python 包和 `admin/node_modules` 是否完整，不完整时会自动重新安装。
 
 如果前端依赖下载太慢，可以在终端先执行一次更稳的安装：
 
@@ -230,12 +231,15 @@ HUSKY=0 VITE_DEPLOY_MODE=server pnpm build
 每天凌晨 3 点执行一次：
 
 ```cron
-0 3 * * * cd /www/wwwroot/code/kuntin/backend && bash deploy.sh >> /www/wwwroot/code/kuntin/backend/deploy.log 2>&1
+0 3 * * * bash /www/wwwroot/code/backend/deploy.sh >> /www/wwwroot/code/backend/deploy.log 2>&1
 ```
 
 ### 可选环境变量
 
-1. `BRANCH`：默认 `main`
-2. `PYTHON_BIN`：默认 `python3`
-3. `BACKEND_SERVICE_NAME`：例如 `quentin-window-backend`
-4. `RESTART_CMD`：自定义重启命令，优先于服务名
+1. `APP_DIR`：默认 `/www/wwwroot/kuntin`
+2. `BRANCH`：默认 `main`
+3. `PYTHON_BIN`：默认 `python3`
+4. `SKIP_GIT_PULL`：设为 `1` 时跳过 Git 拉取
+5. `FORCE_INSTALL_DEPS`：设为 `1` 时强制重新检查并安装依赖
+6. `BACKEND_SERVICE_NAME`：默认 `kuntin-backend`，需要和宝塔 Python 项目名或服务名一致
+7. `RESTART_CMD`：自定义重启命令，优先于服务名
