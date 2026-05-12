@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import datetime
 import re
@@ -44,6 +45,7 @@ from .schemas import (
     BetaApplicationOut,
     BetaApplicationUpdate,
     BetaApplicationWrite,
+    CaptchaResponse,
     CommunityLeadOut,
     CommunityLeadUpdate,
     CommunityLeadWrite,
@@ -72,6 +74,15 @@ from .schemas import (
 )
 from .timeutils import current_time, current_timestamp_ms
 from .seed import seed_if_empty
+from .security import (
+    apply_login_delay,
+    build_auth_error_payload,
+    cleanup_security_state,
+    clear_login_failures,
+    create_captcha,
+    needs_captcha,
+    verify_captcha,
+)
 
 
 app = FastAPI(title="Quentin Window Backend", version="0.2.0")
@@ -89,6 +100,7 @@ ADMIN_DIST_PLATFORM_CONFIG = ADMIN_DIST_DIR / "platform-config.json"
 ADMIN_DIST_FAVICON = ADMIN_DIST_DIR / "favicon.ico"
 ADMIN_DIST_LOGO = ADMIN_DIST_DIR / "logo.svg"
 SEED_FILE = BASE_DIR / "data" / "content.json"
+AUTH_INPUT_MAX_LENGTH = 128
 
 FRONTEND_USER_TABLE_PATCHES = {
     "frontend_users": [
@@ -383,6 +395,17 @@ def serialize_frontend_user(user: FrontendUser) -> dict:
     }
 
 
+@app.middleware("http")
+async def security_headers_middleware(request: Request, call_next):
+    cleanup_security_state()
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "same-origin"
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
 def apply_runtime_schema_patches() -> None:
     with engine.begin() as conn:
         table_rows = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'")).fetchall()
@@ -424,6 +447,15 @@ def sanitize_frontend_register_input(payload: FrontendUserRegisterRequest) -> di
         nickname = nickname[:50]
 
     return {"username": username, "email": email, "password": password, "nickname": nickname}
+
+
+def validate_auth_text(value: str, field_name: str) -> str:
+    normalized = value.strip()
+    if not normalized:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"{field_name}不能为空")
+    if len(normalized) > AUTH_INPUT_MAX_LENGTH:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"{field_name}长度不能超过 {AUTH_INPUT_MAX_LENGTH}")
+    return normalized
 
 
 def resolve_frontend_user(session: dict | None, db: Session) -> FrontendUser | None:
@@ -727,15 +759,42 @@ def health() -> HealthResponse:
     return HealthResponse(ok=True, service="quentin-window-backend", time=datetime.utcnow())
 
 
+@app.get("/api/security/captcha", response_model=CaptchaResponse)
+def get_captcha(scope: str = Query(default="frontend")) -> CaptchaResponse:
+    normalized_scope = scope.strip().lower()
+    if normalized_scope not in {"admin", "frontend"}:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="scope 仅支持 admin 或 frontend")
+    return CaptchaResponse.model_validate(create_captcha(normalized_scope))
+
+
 @app.post("/api/admin/login", response_model=LoginResponse)
-def admin_login(payload: UserLoginRequest, db: Session = Depends(get_db)) -> LoginResponse:
-    return LoginResponse.model_validate(do_login(payload.username, payload.password, db))
+async def admin_login(payload: UserLoginRequest, request: Request, db: Session = Depends(get_db)) -> LoginResponse:
+    username = validate_auth_text(payload.username, "账号")
+    password = validate_auth_text(payload.password, "密码")
+    ip = get_request_ip(request)
+    scope = "admin"
+    await apply_login_delay(scope, ip, username)
+    if needs_captcha(scope, ip, username):
+        verify_captcha(scope, payload.captchaKey, payload.captchaCode)
+    try:
+        result = do_login(username, password, db)
+    except HTTPException:
+        detail = build_auth_error_payload("用户名或密码错误", scope, ip, username)
+        await asyncio.sleep(detail["retryDelaySeconds"])
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=detail)
+    clear_login_failures(scope, ip, username)
+    return LoginResponse.model_validate(result)
 
 
 @app.post("/api/users/register", response_model=FrontendAuthResponse, status_code=status.HTTP_201_CREATED)
-def register_frontend_user(
-    payload: FrontendUserRegisterRequest, db: Session = Depends(get_db)
+async def register_frontend_user(
+    payload: FrontendUserRegisterRequest, request: Request, db: Session = Depends(get_db)
 ) -> FrontendAuthResponse:
+    ip = get_request_ip(request)
+    register_scope = "frontend"
+    register_account = payload.username.strip().lower() or payload.email.strip().lower()
+    if needs_captcha(register_scope, ip, register_account):
+        verify_captcha(register_scope, payload.captchaKey, payload.captchaCode)
     data = sanitize_frontend_register_input(payload)
     duplicate = (
         db.query(FrontendUser)
@@ -743,7 +802,9 @@ def register_frontend_user(
         .first()
     )
     if duplicate:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="用户名或邮箱已存在")
+        detail = build_auth_error_payload("用户名或邮箱已存在", register_scope, ip, register_account)
+        await asyncio.sleep(detail["retryDelaySeconds"])
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=detail)
 
     now = current_time()
     user = FrontendUser(
@@ -760,16 +821,29 @@ def register_frontend_user(
     )
     db.add(user)
     db.commit()
+    clear_login_failures(register_scope, ip, register_account)
     return FrontendAuthResponse.model_validate(login_frontend(data["username"], data["password"], db))
 
 
 @app.post("/api/users/login", response_model=FrontendAuthResponse)
-def frontend_user_login(payload: FrontendUserLoginRequest, db: Session = Depends(get_db)) -> FrontendAuthResponse:
-    account = payload.account.strip().lower()
-    password = payload.password.strip()
-    if not account or not password:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="账号和密码不能为空")
-    return FrontendAuthResponse.model_validate(login_frontend(account, password, db))
+async def frontend_user_login(
+    payload: FrontendUserLoginRequest, request: Request, db: Session = Depends(get_db)
+) -> FrontendAuthResponse:
+    account = validate_auth_text(payload.account, "账号").lower()
+    password = validate_auth_text(payload.password, "密码")
+    ip = get_request_ip(request)
+    scope = "frontend"
+    await apply_login_delay(scope, ip, account)
+    if needs_captcha(scope, ip, account):
+        verify_captcha(scope, payload.captchaKey, payload.captchaCode)
+    try:
+        result = login_frontend(account, password, db)
+    except HTTPException:
+        detail = build_auth_error_payload("账号或密码错误", scope, ip, account)
+        await asyncio.sleep(detail["retryDelaySeconds"])
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=detail)
+    clear_login_failures(scope, ip, account)
+    return FrontendAuthResponse.model_validate(result)
 
 
 @app.get("/api/users/me", response_model=FrontendUserProfileOut)

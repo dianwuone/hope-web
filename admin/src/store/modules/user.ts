@@ -10,6 +10,8 @@ import {
 import {
   type UserResult,
   type RefreshTokenResult,
+  type CaptchaResult,
+  getCaptcha,
   getLogin,
   refreshTokenApi
 } from "@/api/user";
@@ -74,6 +76,13 @@ export const useUserStore = defineStore("pure-user", {
           .catch(error => {
             reject(error);
           });
+      });
+    },
+    async fetchCaptcha(scope: "admin" | "frontend" = "admin") {
+      return new Promise<CaptchaResult>((resolve, reject) => {
+        getCaptcha(scope)
+          .then(data => resolve(data))
+          .catch(error => reject(error));
       });
     },
     /** 前端登出（不调用接口） */

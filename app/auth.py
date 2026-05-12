@@ -19,10 +19,11 @@ def hash_password(password: str) -> str:
 
 
 def login(username: str, password: str, db: Session) -> dict:
+    normalized_username = username.strip()
     user = (
         db.query(AdminUser)
         .filter(
-            AdminUser.username == username,
+            AdminUser.username == normalized_username,
             AdminUser.password == password,
             AdminUser.status == "active",
         )

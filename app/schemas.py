@@ -12,6 +12,8 @@ class ApiModel(BaseModel):
 class UserLoginRequest(BaseModel):
     username: str
     password: str
+    captchaKey: str = ""
+    captchaCode: str = ""
 
 
 class FrontendUserRegisterRequest(BaseModel):
@@ -19,6 +21,8 @@ class FrontendUserRegisterRequest(BaseModel):
     email: str
     password: str
     nickname: str = ""
+    captchaKey: str = ""
+    captchaCode: str = ""
 
 
 class FrontendUserProfileOut(ApiModel):
@@ -37,6 +41,8 @@ class FrontendUserProfileOut(ApiModel):
 class FrontendUserLoginRequest(BaseModel):
     account: str
     password: str
+    captchaKey: str = ""
+    captchaCode: str = ""
 
 
 class FrontendAuthResponse(ApiModel):
@@ -168,6 +174,12 @@ class HealthResponse(ApiModel):
     ok: bool
     service: str
     time: datetime
+
+
+class CaptchaResponse(ApiModel):
+    captchaKey: str
+    captchaSvg: str
+    expiresIn: int
 
 
 class SiteConfigWrite(BaseModel):

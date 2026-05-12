@@ -23,6 +23,12 @@ export type UserResult = {
   };
 };
 
+export type CaptchaResult = {
+  captchaKey: string;
+  captchaSvg: string;
+  expiresIn: number;
+};
+
 export type RefreshTokenResult = {
   success: boolean;
   data: {
@@ -55,6 +61,12 @@ export const getLogin = (data?: object) => {
         }
       } as UserResult;
     });
+};
+
+export const getCaptcha = (scope: "admin" | "frontend" = "admin") => {
+  return http.get<CaptchaResult, Record<string, string>>("/api/security/captcha", {
+    params: { scope }
+  });
 };
 
 /** 刷新`token` */

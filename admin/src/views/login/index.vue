@@ -3,7 +3,7 @@ import Motion from "./utils/motion";
 import { useRouter } from "vue-router";
 import { message } from "@/utils/message";
 import { loginRules } from "./utils/rule";
-import { ref, reactive, toRaw } from "vue";
+import { computed, onMounted, ref, reactive, toRaw } from "vue";
 import { debounce } from "@pureadmin/utils";
 import { useNav } from "@/layout/hooks/useNav";
 import { useEventListener } from "@vueuse/core";
@@ -38,8 +38,40 @@ const { title } = useNav();
 
 const ruleForm = reactive({
   username: "admin",
-  password: "admin123"
+  password: "admin123",
+  captchaKey: "",
+  captchaCode: ""
 });
+
+const captchaSvg = ref("");
+const showCaptcha = ref(false);
+const captchaLoading = ref(false);
+const captchaImage = computed(() =>
+  captchaSvg.value ? `data:image/svg+xml;utf8,${encodeURIComponent(captchaSvg.value)}` : ""
+);
+
+function getErrorPayload(error: any) {
+  return error?.response?.data?.detail ?? null;
+}
+
+function getErrorMessage(error: any, fallback: string) {
+  const detail = getErrorPayload(error);
+  if (typeof detail === "string") return detail;
+  return detail?.message || error?.message || fallback;
+}
+
+async function refreshCaptcha(forceShow = false) {
+  captchaLoading.value = true;
+  try {
+    const result = await useUserStoreHook().fetchCaptcha("admin");
+    ruleForm.captchaKey = result.captchaKey;
+    ruleForm.captchaCode = "";
+    captchaSvg.value = result.captchaSvg;
+    if (forceShow) showCaptcha.value = true;
+  } finally {
+    captchaLoading.value = false;
+  }
+}
 
 const onLogin = async (formEl: FormInstance | undefined) => {
   if (!formEl) return;
@@ -49,7 +81,9 @@ const onLogin = async (formEl: FormInstance | undefined) => {
       useUserStoreHook()
         .loginByUsername({
           username: ruleForm.username,
-          password: ruleForm.password
+          password: ruleForm.password,
+          captchaKey: ruleForm.captchaKey,
+          captchaCode: ruleForm.captchaCode
         })
         .then(res => {
           if (res.success) {
@@ -66,6 +100,20 @@ const onLogin = async (formEl: FormInstance | undefined) => {
           } else {
             message("登录失败", { type: "error" });
           }
+        })
+        .catch(async error => {
+          const detail = getErrorPayload(error);
+          if (detail?.captchaRequired || detail?.captcha) {
+            showCaptcha.value = true;
+          }
+          if (detail?.captcha) {
+            ruleForm.captchaKey = detail.captcha.captchaKey || "";
+            captchaSvg.value = detail.captcha.captchaSvg || "";
+            ruleForm.captchaCode = "";
+          } else if (showCaptcha.value) {
+            await refreshCaptcha(true);
+          }
+          message(getErrorMessage(error, "登录失败"), { type: "error", duration: 3500 });
         })
         .finally(() => (loading.value = false));
     }
@@ -85,6 +133,10 @@ useEventListener(document, "keydown", ({ code }) => {
     !loading.value
   )
     immediateDebounce(ruleFormRef.value);
+});
+
+onMounted(() => {
+  refreshCaptcha(false);
 });
 </script>
 
@@ -120,13 +172,6 @@ useEventListener(document, "keydown", ({ code }) => {
           >
             <Motion :delay="100">
               <el-form-item
-                :rules="[
-                  {
-                    required: true,
-                    message: '请输入账号',
-                    trigger: 'blur'
-                  }
-                ]"
                 prop="username"
               >
                 <el-input
@@ -151,6 +196,33 @@ useEventListener(document, "keydown", ({ code }) => {
             </Motion>
 
             <Motion :delay="250">
+              <el-form-item v-if="showCaptcha" prop="captchaCode">
+                <div class="flex w-full gap-3">
+                  <el-input
+                    v-model="ruleForm.captchaCode"
+                    clearable
+                    maxlength="8"
+                    placeholder="请输入验证码"
+                  />
+                  <button
+                    type="button"
+                    class="h-[40px] min-w-[124px] overflow-hidden rounded-[10px] border border-[var(--el-border-color)] bg-white px-2"
+                    :disabled="captchaLoading"
+                    @click="refreshCaptcha(true)"
+                  >
+                    <img
+                      v-if="captchaImage"
+                      :src="captchaImage"
+                      alt="验证码"
+                      class="h-full w-full object-cover"
+                    />
+                    <span v-else class="text-xs text-[#909399]">加载中</span>
+                  </button>
+                </div>
+              </el-form-item>
+            </Motion>
+
+            <Motion :delay="300">
               <el-button
                 class="w-full mt-4!"
                 size="default"
