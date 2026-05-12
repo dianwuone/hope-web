@@ -247,3 +247,33 @@ HUSKY=0 VITE_DEPLOY_MODE=server pnpm build
 11. `UVICORN_LOG`：默认 `$APP_DIR/uvicorn.log`
 12. `BACKEND_SERVICE_NAME`：默认留空；只有你确实配置了 supervisor/systemd 服务时才需要设置
 13. `RESTART_CMD`：自定义重启命令，优先于宝塔项目名、服务名和默认 uvicorn 重启
+14. `DEPLOY_LOCK_STALE_SECONDS`：默认 `1800`，用于判断没有元数据的旧锁多久后可自动回收
+
+### 自锁排查
+
+如果部署日志出现下面这类提示：
+
+```text
+已有部署任务正在执行，退出本次任务: /www/wwwroot/.../.deploy-state/deploy.lock
+```
+
+先看前几行日志里的 `脚本目录` 和 `部署目录`：
+
+- `脚本目录` 是 `deploy.sh` 自己所在的位置
+- `部署目录` 是脚本实际使用的 `APP_DIR`
+
+如果两者明显不对应，比如脚本在 `/www/wwwroot/code/kuntin/backend/deploy.sh`，但日志里 `部署目录` 却是 `/www/wwwroot/kuntin`，说明宝塔计划任务、环境变量或外层脚本覆盖了 `APP_DIR`。这会让锁文件、日志、虚拟环境都写到错误目录，必须先把 `APP_DIR` 改回真实后端目录。
+
+新版脚本会自动识别并清理陈旧锁；如果你需要手动处理，先确认没有正在运行的部署进程：
+
+```bash
+ps -ef | grep deploy.sh
+```
+
+确认没有有效部署进程后，再删除锁目录：
+
+```bash
+rm -rf /www/wwwroot/code/kuntin/backend/.deploy-state/deploy.lock
+```
+
+如果你的实际 `APP_DIR` 不是默认值，请把上面的路径替换成日志里 `部署目录` 对应的 `.deploy-state/deploy.lock`。

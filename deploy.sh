@@ -2,6 +2,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_PATH="$SCRIPT_DIR/$(basename "${BASH_SOURCE[0]}")"
 APP_DIR="${APP_DIR:-/www/wwwroot/code/kuntin/backend}"
 BRANCH="${BRANCH:-main}"
 PYTHON_BIN="${PYTHON_BIN:-/usr/bin/python3}"
@@ -22,6 +23,8 @@ GIT_FETCH_RETRY_DELAY="${GIT_FETCH_RETRY_DELAY:-8}"
 GIT_HTTP_VERSION="${GIT_HTTP_VERSION:-HTTP/1.1}"
 DEPLOY_STATE_DIR="${DEPLOY_STATE_DIR:-$APP_DIR/.deploy-state}"
 DEPLOY_LOCK_DIR="${DEPLOY_LOCK_DIR:-$DEPLOY_STATE_DIR/deploy.lock}"
+DEPLOY_LOCK_INFO_FILE="$DEPLOY_LOCK_DIR/lock.info"
+DEPLOY_LOCK_STALE_SECONDS="${DEPLOY_LOCK_STALE_SECONDS:-1800}"
 DEPLOY_PYTHON=""
 PNPM_RUNNER="pnpm"
 PYTHON_DEP_HASH_FILE="$DEPLOY_STATE_DIR/requirements.sha256"
@@ -44,21 +47,154 @@ is_truthy() {
   [[ "$1" == "1" || "$1" == "true" || "$1" == "yes" ]]
 }
 
+write_deploy_lock_info() {
+  {
+    printf 'pid=%s\n' "$$"
+    printf 'started_at=%s\n' "$(date '+%Y-%m-%d %H:%M:%S')"
+    printf 'started_ts=%s\n' "$(date '+%s')"
+    printf 'host=%s\n' "$(hostname 2>/dev/null || printf 'unknown')"
+    printf 'app_dir=%s\n' "$APP_DIR"
+    printf 'script_path=%s\n' "$SCRIPT_PATH"
+  } > "$DEPLOY_LOCK_INFO_FILE"
+}
+
+load_deploy_lock_info() {
+  DEPLOY_LOCK_OWNER_PID=""
+  DEPLOY_LOCK_OWNER_STARTED_AT=""
+  DEPLOY_LOCK_OWNER_STARTED_TS=""
+  DEPLOY_LOCK_OWNER_HOST=""
+  DEPLOY_LOCK_OWNER_APP_DIR=""
+  DEPLOY_LOCK_OWNER_SCRIPT_PATH=""
+
+  [[ -f "$DEPLOY_LOCK_INFO_FILE" ]] || return 1
+
+  local key value
+  while IFS='=' read -r key value; do
+    case "$key" in
+      pid) DEPLOY_LOCK_OWNER_PID="$value" ;;
+      started_at) DEPLOY_LOCK_OWNER_STARTED_AT="$value" ;;
+      started_ts) DEPLOY_LOCK_OWNER_STARTED_TS="$value" ;;
+      host) DEPLOY_LOCK_OWNER_HOST="$value" ;;
+      app_dir) DEPLOY_LOCK_OWNER_APP_DIR="$value" ;;
+      script_path) DEPLOY_LOCK_OWNER_SCRIPT_PATH="$value" ;;
+    esac
+  done < "$DEPLOY_LOCK_INFO_FILE"
+
+  return 0
+}
+
+deploy_lock_pid_running() {
+  local lock_pid="${1:-}"
+  [[ "$lock_pid" =~ ^[0-9]+$ ]] || return 1
+  kill -0 "$lock_pid" 2>/dev/null
+}
+
+find_other_deploy_process() {
+  command -v pgrep >/dev/null 2>&1 || return 1
+
+  local pid
+  while IFS= read -r pid; do
+    if [[ -n "$pid" && "$pid" != "$$" ]]; then
+      printf '%s\n' "$pid"
+      return 0
+    fi
+  done < <(pgrep -f "$SCRIPT_PATH" || true)
+
+  return 1
+}
+
+deploy_lock_age_seconds() {
+  local lock_mtime now_ts
+  lock_mtime="$(stat -c '%Y' "$DEPLOY_LOCK_DIR" 2>/dev/null || true)"
+  [[ "$lock_mtime" =~ ^[0-9]+$ ]] || return 1
+
+  now_ts="$(date '+%s')"
+  printf '%s\n' "$((now_ts - lock_mtime))"
+}
+
+clear_deploy_lock_dir() {
+  case "$DEPLOY_LOCK_DIR" in
+    "$DEPLOY_STATE_DIR"/*) ;;
+    *)
+      fail "部署锁目录不在状态目录内，拒绝清理: $DEPLOY_LOCK_DIR"
+      ;;
+  esac
+
+  rm -rf "$DEPLOY_LOCK_DIR"
+}
+
 release_deploy_lock() {
   if [[ -n "${DEPLOY_LOCK_HELD:-}" ]]; then
+    rm -f "$DEPLOY_LOCK_INFO_FILE" 2>/dev/null || true
     rmdir "$DEPLOY_LOCK_DIR" 2>/dev/null || true
+    unset DEPLOY_LOCK_HELD
   fi
 }
 
 acquire_deploy_lock() {
+  if ! [[ "$DEPLOY_LOCK_STALE_SECONDS" =~ ^[0-9]+$ ]]; then
+    fail "DEPLOY_LOCK_STALE_SECONDS 必须是非负整数"
+  fi
+
+  mkdir -p "$DEPLOY_STATE_DIR"
+
   if mkdir "$DEPLOY_LOCK_DIR" 2>/dev/null; then
     DEPLOY_LOCK_HELD=1
+    write_deploy_lock_info
     trap release_deploy_lock EXIT
+    trap 'release_deploy_lock; exit 130' INT
+    trap 'release_deploy_lock; exit 143' TERM
+    log "已获取部署锁: $DEPLOY_LOCK_DIR"
     return
   fi
 
-  log "已有部署任务正在执行，退出本次任务: $DEPLOY_LOCK_DIR"
-  exit 0
+  if load_deploy_lock_info; then
+    if deploy_lock_pid_running "$DEPLOY_LOCK_OWNER_PID"; then
+      log "已有部署任务正在执行，PID: ${DEPLOY_LOCK_OWNER_PID:-unknown}，开始时间: ${DEPLOY_LOCK_OWNER_STARTED_AT:-unknown}，主机: ${DEPLOY_LOCK_OWNER_HOST:-unknown}，部署目录: ${DEPLOY_LOCK_OWNER_APP_DIR:-unknown}"
+      exit 0
+    fi
+
+    log "检测到陈旧部署锁，持有进程已不存在，准备清理: pid=${DEPLOY_LOCK_OWNER_PID:-unknown} started_at=${DEPLOY_LOCK_OWNER_STARTED_AT:-unknown}"
+  else
+    local other_deploy_pid=""
+    other_deploy_pid="$(find_other_deploy_process || true)"
+    if [[ -n "$other_deploy_pid" ]]; then
+      log "检测到另一个部署脚本进程仍在运行，PID: $other_deploy_pid，继续保留现有锁: $DEPLOY_LOCK_DIR"
+      exit 0
+    fi
+
+    local lock_age=""
+    lock_age="$(deploy_lock_age_seconds || true)"
+    if [[ "$lock_age" =~ ^[0-9]+$ ]] && (( lock_age < DEPLOY_LOCK_STALE_SECONDS )); then
+      log "检测到近期创建但缺少元数据的部署锁（${lock_age}s < ${DEPLOY_LOCK_STALE_SECONDS}s），为避免并发部署，本次退出: $DEPLOY_LOCK_DIR"
+      exit 0
+    fi
+
+    if [[ "$lock_age" =~ ^[0-9]+$ ]]; then
+      log "检测到无元数据的陈旧部署锁（已存在 ${lock_age}s），准备清理: $DEPLOY_LOCK_DIR"
+    else
+      log "检测到无法识别的部署锁，准备按陈旧锁处理: $DEPLOY_LOCK_DIR"
+    fi
+  fi
+
+  clear_deploy_lock_dir
+
+  if mkdir "$DEPLOY_LOCK_DIR" 2>/dev/null; then
+    DEPLOY_LOCK_HELD=1
+    write_deploy_lock_info
+    trap release_deploy_lock EXIT
+    trap 'release_deploy_lock; exit 130' INT
+    trap 'release_deploy_lock; exit 143' TERM
+    log "已清理陈旧部署锁并重新获取: $DEPLOY_LOCK_DIR"
+    return
+  fi
+
+  if load_deploy_lock_info && deploy_lock_pid_running "$DEPLOY_LOCK_OWNER_PID"; then
+    log "部署锁已被新的部署任务接管，PID: ${DEPLOY_LOCK_OWNER_PID:-unknown}，退出本次任务"
+    exit 0
+  fi
+
+  fail "部署锁清理后仍无法重新获取: $DEPLOY_LOCK_DIR"
 }
 
 prepare_deploy_environment() {
