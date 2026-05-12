@@ -14,6 +14,36 @@ class UserLoginRequest(BaseModel):
     password: str
 
 
+class FrontendUserRegisterRequest(BaseModel):
+    username: str
+    email: str
+    password: str
+    nickname: str = ""
+
+
+class FrontendUserProfileOut(ApiModel):
+    id: int
+    username: str
+    email: str
+    nickname: str
+    avatar: str = ""
+    bio: str | None = None
+    status: str
+    lastLoginAt: datetime | None = None
+    createdAt: datetime
+    updatedAt: datetime
+
+
+class FrontendUserLoginRequest(BaseModel):
+    account: str
+    password: str
+
+
+class FrontendAuthResponse(ApiModel):
+    token: str
+    user: FrontendUserProfileOut
+
+
 class AdminUserOut(ApiModel):
     id: int
     username: str
@@ -75,10 +105,53 @@ class ArticleOut(ApiModel):
     publishedAt: datetime | None = None
     viewCount: int
     likeCount: int
+    favoriteCount: int = 0
+    commentCount: int = 0
     createdAt: datetime
     updatedAt: datetime
     column: ColumnOut | None = None
     tags: list[TagOut] = Field(default_factory=list)
+
+
+class ArticleInteractionRequest(BaseModel):
+    interactionType: str
+
+
+class ArticleInteractionResponse(ApiModel):
+    ok: bool
+    interactionType: str
+    applied: bool
+    active: bool = True
+    articleSlug: str
+    likeCount: int
+    favoriteCount: int
+    commentCount: int
+
+
+class ArticleCommentWrite(BaseModel):
+    nickname: str = "访客"
+    content: str
+
+
+class ArticleCommentOut(ApiModel):
+    id: int
+    articleId: int
+    nickname: str
+    content: str
+    status: str
+    createdAt: datetime
+    updatedAt: datetime
+
+
+class ArticleCommentListResponse(ApiModel):
+    items: list[ArticleCommentOut] = Field(default_factory=list)
+    total: int
+
+
+class ArticleEngagementResponse(ApiModel):
+    likeCount: int
+    favoriteCount: int
+    commentCount: int
 
 
 class ListResponse(ApiModel):
@@ -253,6 +326,7 @@ class AdItemOut(ApiModel):
 
 
 class WishlistWrite(BaseModel):
+    userId: int | None = None
     visitorId: str = ""
     projectSlug: str = ""
     projectName: str = ""
@@ -275,6 +349,7 @@ class WishlistUpdate(BaseModel):
 
 class WishlistOut(ApiModel):
     id: int
+    userId: int | None = None
     visitorId: str
     projectSlug: str | None = None
     projectName: str | None = None
@@ -290,6 +365,7 @@ class WishlistOut(ApiModel):
 
 
 class CommunityLeadWrite(BaseModel):
+    userId: int | None = None
     leadType: str = "community"
     intentReason: str = "latest_updates"
     name: str = ""
@@ -305,6 +381,7 @@ class CommunityLeadUpdate(BaseModel):
 
 class CommunityLeadOut(ApiModel):
     id: int
+    userId: int | None = None
     leadType: str
     intentReason: str
     name: str | None = None
@@ -317,6 +394,7 @@ class CommunityLeadOut(ApiModel):
 
 
 class BetaApplicationWrite(BaseModel):
+    userId: int | None = None
     projectSlug: str = ""
     sourcePage: str = "lab"
     roleType: str = "explorer"
@@ -335,6 +413,7 @@ class BetaApplicationUpdate(BaseModel):
 
 class BetaApplicationOut(ApiModel):
     id: int
+    userId: int | None = None
     projectSlug: str | None = None
     sourcePage: str
     roleType: str
@@ -354,3 +433,30 @@ class DashboardResponse(ApiModel):
     wishlist: dict
     leads: dict
     beta: dict
+
+
+class FrontendUserListItem(ApiModel):
+    id: int
+    username: str
+    email: str
+    nickname: str
+    avatar: str = ""
+    bio: str | None = None
+    status: str
+    lastLoginAt: datetime | None = None
+    createdAt: datetime
+    updatedAt: datetime
+    wishlistCount: int = 0
+    likeCount: int = 0
+    favoriteCount: int = 0
+    commentCount: int = 0
+    betaApplicationCount: int = 0
+    communityLeadCount: int = 0
+
+
+class FrontendUserUpdate(BaseModel):
+    nickname: str = ""
+    email: str = ""
+    avatar: str = ""
+    bio: str = ""
+    status: str = "active"

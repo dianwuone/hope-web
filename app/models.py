@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Table, Text
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, Table, Text
 from sqlalchemy.orm import relationship
 
 from .database import Base
@@ -23,6 +23,28 @@ class AdminUser(Base):
     displayName = Column(String(50), nullable=False)
     role = Column(String(20), nullable=False)
     status = Column(String(20), nullable=False)
+
+
+class FrontendUser(Base):
+    __tablename__ = "frontend_users"
+
+    id = Column(Integer, primary_key=True, index=True)
+    username = Column(String(50), nullable=False, unique=True, index=True)
+    email = Column(String(100), nullable=False, unique=True, index=True)
+    passwordHash = Column(String(255), nullable=False)
+    nickname = Column(String(50), nullable=False)
+    avatar = Column(String(255), nullable=False, default="")
+    bio = Column(Text, nullable=True)
+    status = Column(String(20), nullable=False, default="active")
+    lastLoginAt = Column(DateTime(timezone=False), nullable=True)
+    createdAt = Column(DateTime(timezone=False), nullable=False)
+    updatedAt = Column(DateTime(timezone=False), nullable=False)
+
+    wishlistItems = relationship("WishlistItem", back_populates="user")
+    articleInteractions = relationship("ArticleInteraction", back_populates="user")
+    articleComments = relationship("ArticleComment", back_populates="user")
+    communityLeads = relationship("CommunityLead", back_populates="user")
+    betaApplications = relationship("BetaApplication", back_populates="user")
 
 
 class ContentCategory(Base):
@@ -149,6 +171,7 @@ class BetaApplication(Base):
     __tablename__ = "beta_applications"
 
     id = Column(Integer, primary_key=True, index=True)
+    userId = Column(Integer, ForeignKey("frontend_users.id"), nullable=True, index=True)
     projectSlug = Column(String(120), nullable=True, index=True)
     sourcePage = Column(String(50), nullable=False, default="lab")
     roleType = Column(String(30), nullable=False)
@@ -162,11 +185,14 @@ class BetaApplication(Base):
     createdAt = Column(DateTime(timezone=False), nullable=False)
     updatedAt = Column(DateTime(timezone=False), nullable=False)
 
+    user = relationship("FrontendUser", back_populates="betaApplications")
+
 
 class CommunityLead(Base):
     __tablename__ = "community_leads"
 
     id = Column(Integer, primary_key=True, index=True)
+    userId = Column(Integer, ForeignKey("frontend_users.id"), nullable=True, index=True)
     leadType = Column(String(20), nullable=False, default="community")
     intentReason = Column(String(30), nullable=False)
     name = Column(String(50), nullable=True)
@@ -177,11 +203,14 @@ class CommunityLead(Base):
     createdAt = Column(DateTime(timezone=False), nullable=False)
     updatedAt = Column(DateTime(timezone=False), nullable=False)
 
+    user = relationship("FrontendUser", back_populates="communityLeads")
+
 
 class WishlistItem(Base):
     __tablename__ = "wishlist_items"
 
     id = Column(Integer, primary_key=True, index=True)
+    userId = Column(Integer, ForeignKey("frontend_users.id"), nullable=True, index=True)
     visitorId = Column(String(64), nullable=False, index=True)
     projectSlug = Column(String(120), nullable=True, index=True)
     projectName = Column(String(120), nullable=True)
@@ -194,6 +223,41 @@ class WishlistItem(Base):
     isActive = Column(Integer, nullable=False, default=1)
     createdAt = Column(DateTime(timezone=False), nullable=False)
     updatedAt = Column(DateTime(timezone=False), nullable=False)
+
+    user = relationship("FrontendUser", back_populates="wishlistItems")
+
+
+class ArticleInteraction(Base):
+    __tablename__ = "article_interactions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    articleId = Column(Integer, ForeignKey("articles.id"), nullable=False, index=True)
+    userId = Column(Integer, ForeignKey("frontend_users.id"), nullable=True, index=True)
+    interactionType = Column(String(20), nullable=False, index=True)
+    clientIp = Column(String(64), nullable=False, index=True)
+    isCanceled = Column(Boolean, nullable=False, default=False)
+    createdAt = Column(DateTime(timezone=False), nullable=False)
+    updatedAt = Column(DateTime(timezone=False), nullable=False)
+
+    article = relationship("Article", back_populates="interactions")
+    user = relationship("FrontendUser", back_populates="articleInteractions")
+
+
+class ArticleComment(Base):
+    __tablename__ = "article_comments"
+
+    id = Column(Integer, primary_key=True, index=True)
+    articleId = Column(Integer, ForeignKey("articles.id"), nullable=False, index=True)
+    userId = Column(Integer, ForeignKey("frontend_users.id"), nullable=True, index=True)
+    nickname = Column(String(50), nullable=False, default="访客")
+    content = Column(Text, nullable=False)
+    clientIp = Column(String(64), nullable=False, index=True)
+    status = Column(String(20), nullable=False, default="published")
+    createdAt = Column(DateTime(timezone=False), nullable=False)
+    updatedAt = Column(DateTime(timezone=False), nullable=False)
+
+    article = relationship("Article", back_populates="comments")
+    user = relationship("FrontendUser", back_populates="articleComments")
 
 
 class Article(Base):
@@ -218,3 +282,5 @@ class Article(Base):
 
     column = relationship("ContentCategory", back_populates="articles")
     tags = relationship("ContentTag", secondary=article_tag_relations, back_populates="articles")
+    interactions = relationship("ArticleInteraction", back_populates="article", cascade="all, delete-orphan")
+    comments = relationship("ArticleComment", back_populates="article", cascade="all, delete-orphan")

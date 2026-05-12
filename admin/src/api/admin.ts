@@ -152,6 +152,25 @@ export interface DashboardData {
   };
 }
 
+export interface FrontendUserItem {
+  id: number;
+  username: string;
+  email: string;
+  nickname: string;
+  avatar: string;
+  bio?: string;
+  status: string;
+  lastLoginAt?: string;
+  createdAt: string;
+  updatedAt: string;
+  wishlistCount: number;
+  likeCount: number;
+  favoriteCount: number;
+  commentCount: number;
+  betaApplicationCount: number;
+  communityLeadCount: number;
+}
+
 export const fetchColumns = () => http.get<ListResult<any>, any>("/api/columns");
 export const fetchTags = () => http.get<ListResult<any>, any>("/api/tags");
 export const fetchArticles = () => http.get<ListResult<ArticleItem>, any>("/api/admin/articles");
@@ -185,6 +204,8 @@ export const updatePageConfig = (id: number, data: any) => http.request<ConfigIt
 export const deletePageConfig = (id: number) => http.request<any>("delete", `/api/admin/page-configs/${id}`);
 
 export const fetchDashboard = () => http.get<DashboardData, any>("/api/admin/dashboard");
+export const fetchFrontendUsers = () => http.get<ListResult<FrontendUserItem>, any>("/api/admin/frontend-users");
+export const updateFrontendUser = (id: number, data: any) => http.request<FrontendUserItem>("put", `/api/admin/frontend-users/${id}`, { data });
 
 export const fetchWishlistItems = () => http.get<ListResult<WishlistItem>, any>("/api/admin/wishlist-items");
 export const updateWishlistItem = (id: number, data: any) => http.request<WishlistItem>("put", `/api/admin/wishlist-items/${id}`, { data });

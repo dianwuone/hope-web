@@ -24,17 +24,32 @@ const form = reactive({
 
 const titleMap = computed(() => (editingId.value ? "编辑文章" : "新建文章"));
 
-function resolveTagIds(input: string) {
-  return input
-    .split(",")
+function getErrorMessage(error: any, fallback: string) {
+  return error?.response?.data?.detail || error?.message || fallback;
+}
+
+function ensureValidColumnId() {
+  const hasCurrentColumn = columns.value.some(item => item.id === Number(form.columnId));
+  if (!hasCurrentColumn && columns.value.length) {
+    form.columnId = columns.value[0].id;
+  }
+}
+
+function resolveTagResult(input: string) {
+  const unknownTokens: string[] = [];
+  const tagIds = input
+    .split(/[，,]/)
     .map(item => item.trim())
     .filter(Boolean)
     .map(token => {
       if (/^\d+$/.test(token)) return Number(token);
       const found = tags.value.find(tag => tag.name === token || tag.slug === token);
+      if (!found) unknownTokens.push(token);
       return found?.id;
     })
     .filter(id => Number.isInteger(id));
+
+  return { tagIds, unknownTokens };
 }
 
 function resetForm() {
@@ -58,9 +73,9 @@ async function loadData() {
     items.value = articleRes.items;
     columns.value = columnRes.items;
     tags.value = tagRes.items;
-    if (!form.columnId && columns.value.length) form.columnId = columns.value[0].id;
+    ensureValidColumnId();
   } catch (error: any) {
-    ElMessage.error(error?.message || "加载文章失败");
+    ElMessage.error(getErrorMessage(error, "加载文章失败"));
   } finally {
     loading.value = false;
   }
@@ -87,14 +102,38 @@ function openEdit(row: any) {
 }
 
 async function submit() {
+  const title = form.title.trim();
+  const slug = form.slug.trim();
+  const summary = form.summary.trim();
+  const contentBody = form.contentBody.trim();
+  const authorName = form.authorName.trim();
+  const { tagIds, unknownTokens } = resolveTagResult(form.tagInput);
+
+  if (!title || !slug || !summary || !contentBody) {
+    ElMessage.error("标题、Slug、摘要和正文不能为空");
+    return;
+  }
+  if (!columns.value.length) {
+    ElMessage.error("暂无可用栏目，请先创建栏目");
+    return;
+  }
+  if (!columns.value.some(item => item.id === Number(form.columnId))) {
+    ElMessage.error("请选择有效的栏目");
+    return;
+  }
+  if (unknownTokens.length) {
+    ElMessage.error(`未找到这些标签：${unknownTokens.join("、")}`);
+    return;
+  }
+
   const payload = {
-    title: form.title,
-    slug: form.slug,
-    summary: form.summary,
-    contentBody: form.contentBody,
-    authorName: form.authorName,
+    title,
+    slug,
+    summary,
+    contentBody,
+    authorName: authorName || "昆廷",
     columnId: Number(form.columnId),
-    tagIds: resolveTagIds(form.tagInput),
+    tagIds,
     status: form.status
   };
   try {
@@ -108,7 +147,7 @@ async function submit() {
     dialogVisible.value = false;
     await loadData();
   } catch (error: any) {
-    ElMessage.error(error?.message || "保存文章失败");
+    ElMessage.error(getErrorMessage(error, "保存文章失败"));
   }
 }
 
@@ -118,7 +157,7 @@ async function remove(row: any) {
     ElMessage.success("文章已删除");
     await loadData();
   } catch (error: any) {
-    ElMessage.error(error?.message || "删除文章失败");
+    ElMessage.error(getErrorMessage(error, "删除文章失败"));
   }
 }
 

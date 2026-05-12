@@ -4,22 +4,26 @@ import json
 from datetime import datetime
 import re
 
-from fastapi import Depends, FastAPI, HTTPException, Query, status
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, RedirectResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from sqlalchemy import text
 from sqlalchemy.orm import Session, joinedload
 
 from .auth import login as do_login
-from .auth import require_auth
+from .auth import get_frontend_session, hash_password, login_frontend, require_auth, require_frontend_auth
 from .database import BASE_DIR, Base, SessionLocal, engine, get_db
 from .models import (
     AdItem,
     Article,
+    ArticleComment,
+    ArticleInteraction,
     BetaApplication,
     CommunityLead,
     ContentCategory,
     ContentTag,
+    FrontendUser,
     Offer,
     PageConfig,
     Project,
@@ -29,6 +33,12 @@ from .models import (
 from .schemas import (
     AdItemOut,
     AdItemWrite,
+    ArticleCommentListResponse,
+    ArticleCommentOut,
+    ArticleCommentWrite,
+    ArticleEngagementResponse,
+    ArticleInteractionRequest,
+    ArticleInteractionResponse,
     ArticleOut,
     ArticleWrite,
     BetaApplicationOut,
@@ -39,6 +49,12 @@ from .schemas import (
     CommunityLeadWrite,
     DashboardResponse,
     DeleteResponse,
+    FrontendAuthResponse,
+    FrontendUserListItem,
+    FrontendUserLoginRequest,
+    FrontendUserProfileOut,
+    FrontendUserRegisterRequest,
+    FrontendUserUpdate,
     HealthResponse,
     LoginResponse,
     OfferOut,
@@ -74,6 +90,37 @@ ADMIN_DIST_FAVICON = ADMIN_DIST_DIR / "favicon.ico"
 ADMIN_DIST_LOGO = ADMIN_DIST_DIR / "logo.svg"
 SEED_FILE = BASE_DIR / "data" / "content.json"
 
+FRONTEND_USER_TABLE_PATCHES = {
+    "frontend_users": [
+        "CREATE TABLE frontend_users (id INTEGER PRIMARY KEY, username VARCHAR(50) NOT NULL UNIQUE, email VARCHAR(100) NOT NULL UNIQUE, passwordHash VARCHAR(255) NOT NULL, nickname VARCHAR(50) NOT NULL, avatar VARCHAR(255) NOT NULL DEFAULT '', bio TEXT, status VARCHAR(20) NOT NULL DEFAULT 'active', lastLoginAt DATETIME, createdAt DATETIME NOT NULL, updatedAt DATETIME NOT NULL)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS ix_frontend_users_username ON frontend_users (username)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS ix_frontend_users_email ON frontend_users (email)",
+    ],
+    "wishlist_items.userId": [
+        "ALTER TABLE wishlist_items ADD COLUMN userId INTEGER",
+        "CREATE INDEX IF NOT EXISTS ix_wishlist_items_userId ON wishlist_items (userId)",
+    ],
+    "community_leads.userId": [
+        "ALTER TABLE community_leads ADD COLUMN userId INTEGER",
+        "CREATE INDEX IF NOT EXISTS ix_community_leads_userId ON community_leads (userId)",
+    ],
+    "beta_applications.userId": [
+        "ALTER TABLE beta_applications ADD COLUMN userId INTEGER",
+        "CREATE INDEX IF NOT EXISTS ix_beta_applications_userId ON beta_applications (userId)",
+    ],
+    "article_interactions.userId": [
+        "ALTER TABLE article_interactions ADD COLUMN userId INTEGER",
+        "CREATE INDEX IF NOT EXISTS ix_article_interactions_userId ON article_interactions (userId)",
+    ],
+    "article_interactions.isCanceled": [
+        "ALTER TABLE article_interactions ADD COLUMN isCanceled BOOLEAN NOT NULL DEFAULT 0",
+    ],
+    "article_comments.userId": [
+        "ALTER TABLE article_comments ADD COLUMN userId INTEGER",
+        "CREATE INDEX IF NOT EXISTS ix_article_comments_userId ON article_comments (userId)",
+    ],
+}
+
 
 def serialize_column(column: ContentCategory | None) -> dict | None:
     if not column:
@@ -100,6 +147,12 @@ def serialize_tag(tag: ContentTag) -> dict:
 
 
 def serialize_article(article: Article) -> dict:
+    favorite_count = len(
+        [item for item in getattr(article, "interactions", []) if item.interactionType == "favorite"]
+    )
+    comment_count = len(
+        [item for item in getattr(article, "comments", []) if item.status == "published"]
+    )
     return {
         "id": article.id,
         "title": article.title,
@@ -116,6 +169,8 @@ def serialize_article(article: Article) -> dict:
         "publishedAt": article.publishedAt,
         "viewCount": article.viewCount,
         "likeCount": article.likeCount,
+        "favoriteCount": favorite_count,
+        "commentCount": comment_count,
         "createdAt": article.createdAt,
         "updatedAt": article.updatedAt,
         "column": serialize_column(article.column),
@@ -274,6 +329,7 @@ def serialize_ad_item(item: AdItem) -> dict:
 def serialize_wishlist_item(item: WishlistItem) -> dict:
     return {
         "id": item.id,
+        "userId": item.userId,
         "visitorId": item.visitorId,
         "projectSlug": item.projectSlug,
         "projectName": item.projectName,
@@ -286,6 +342,118 @@ def serialize_wishlist_item(item: WishlistItem) -> dict:
         "isActive": item.isActive,
         "createdAt": item.createdAt,
         "updatedAt": item.updatedAt,
+    }
+
+
+def serialize_article_comment(item: ArticleComment) -> dict:
+    return {
+        "id": item.id,
+        "articleId": item.articleId,
+        "nickname": item.nickname,
+        "content": item.content,
+        "status": item.status,
+        "createdAt": item.createdAt,
+        "updatedAt": item.updatedAt,
+    }
+
+
+def get_request_ip(request: Request) -> str:
+    forwarded_for = request.headers.get("x-forwarded-for", "")
+    if forwarded_for.strip():
+        return forwarded_for.split(",")[0].strip()[:64]
+    real_ip = request.headers.get("x-real-ip", "").strip()
+    if real_ip:
+        return real_ip[:64]
+    client_host = request.client.host if request.client else ""
+    return (client_host or "unknown")[:64]
+
+
+def serialize_frontend_user(user: FrontendUser) -> dict:
+    return {
+        "id": user.id,
+        "username": user.username,
+        "email": user.email,
+        "nickname": user.nickname,
+        "avatar": user.avatar or "",
+        "bio": user.bio,
+        "status": user.status,
+        "lastLoginAt": user.lastLoginAt,
+        "createdAt": user.createdAt,
+        "updatedAt": user.updatedAt,
+    }
+
+
+def apply_runtime_schema_patches() -> None:
+    with engine.begin() as conn:
+        table_rows = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'")).fetchall()
+        tables = {row[0] for row in table_rows}
+
+        def has_column(table_name: str, column_name: str) -> bool:
+            rows = conn.execute(text(f"PRAGMA table_info({table_name})")).fetchall()
+            return any(row[1] == column_name for row in rows)
+
+        for key, statements in FRONTEND_USER_TABLE_PATCHES.items():
+            if "." in key:
+                table_name, column_name = key.split(".", 1)
+                if table_name in tables and has_column(table_name, column_name):
+                    continue
+            else:
+                if key in tables:
+                    continue
+            for sql in statements:
+                conn.execute(text(sql))
+            if "." not in key:
+                tables.add(key)
+
+
+def sanitize_frontend_register_input(payload: FrontendUserRegisterRequest) -> dict:
+    username = payload.username.strip().lower()
+    email = payload.email.strip().lower()
+    password = payload.password.strip()
+    nickname = payload.nickname.strip() or username
+
+    if not username or len(username) < 3:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="用户名至少 3 位")
+    if not re.fullmatch(r"[a-z0-9][-_a-z0-9]{2,49}", username):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="用户名仅支持字母、数字、-、_")
+    if not EMAIL_RE.match(email):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="邮箱格式不正确")
+    if len(password) < 6:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="密码至少 6 位")
+    if len(nickname) > 50:
+        nickname = nickname[:50]
+
+    return {"username": username, "email": email, "password": password, "nickname": nickname}
+
+
+def resolve_frontend_user(session: dict | None, db: Session) -> FrontendUser | None:
+    if not session:
+        return None
+    return db.query(FrontendUser).filter(FrontendUser.id == session["id"]).first()
+
+
+def get_article_engagement(article: Article, db: Session) -> dict:
+    favorite_count = (
+        db.query(ArticleInteraction)
+        .filter(
+            ArticleInteraction.articleId == article.id,
+            ArticleInteraction.interactionType == "favorite",
+            ArticleInteraction.isCanceled == False,
+        )
+        .count()
+    )
+    comment_count = (
+        db.query(ArticleComment)
+        .filter(
+            ArticleComment.articleId == article.id,
+            ArticleComment.status == "published",
+        )
+        .count()
+    )
+    return {
+        "likeCount": article.likeCount,
+        "favoriteCount": favorite_count,
+        "commentCount": comment_count,
     }
 
 
@@ -307,6 +475,7 @@ def fetch_active_ads(db: Session, page_key: str = "", slot_key: str = "") -> lis
 def serialize_community_lead(item: CommunityLead) -> dict:
     return {
         "id": item.id,
+        "userId": item.userId,
         "leadType": item.leadType,
         "intentReason": item.intentReason,
         "name": item.name,
@@ -322,6 +491,7 @@ def serialize_community_lead(item: CommunityLead) -> dict:
 def serialize_beta_application(item: BetaApplication) -> dict:
     return {
         "id": item.id,
+        "userId": item.userId,
         "projectSlug": item.projectSlug,
         "sourcePage": item.sourcePage,
         "roleType": item.roleType,
@@ -455,6 +625,7 @@ def sanitize_ad_item_input(payload: AdItemWrite) -> dict:
 
 def sanitize_wishlist_input(payload: WishlistWrite) -> dict:
     data = payload.model_dump()
+    data["userId"] = data.get("userId")
     data["visitorId"] = data["visitorId"].strip() or f"guest-{current_timestamp_ms()}"
     data["projectSlug"] = data["projectSlug"].strip()
     data["projectName"] = data["projectName"].strip()
@@ -472,6 +643,7 @@ def sanitize_wishlist_input(payload: WishlistWrite) -> dict:
 
 def sanitize_community_lead_input(payload: CommunityLeadWrite) -> dict:
     data = payload.model_dump()
+    data["userId"] = data.get("userId")
     data["leadType"] = data["leadType"].strip() or "community"
     data["intentReason"] = data["intentReason"].strip() or "latest_updates"
     data["name"] = data["name"].strip()
@@ -484,6 +656,7 @@ def sanitize_community_lead_input(payload: CommunityLeadWrite) -> dict:
 
 def sanitize_beta_application_input(payload: BetaApplicationWrite) -> dict:
     data = payload.model_dump()
+    data["userId"] = data.get("userId")
     data["projectSlug"] = data["projectSlug"].strip()
     data["sourcePage"] = data["sourcePage"].strip() or "lab"
     data["roleType"] = data["roleType"].strip() or "explorer"
@@ -502,6 +675,7 @@ def sanitize_beta_application_input(payload: BetaApplicationWrite) -> dict:
 @app.on_event("startup")
 def startup() -> None:
     Base.metadata.create_all(bind=engine)
+    apply_runtime_schema_patches()
     with SessionLocal() as db:
         seed_if_empty(db, SEED_FILE)
 
@@ -558,6 +732,54 @@ def admin_login(payload: UserLoginRequest, db: Session = Depends(get_db)) -> Log
     return LoginResponse.model_validate(do_login(payload.username, payload.password, db))
 
 
+@app.post("/api/users/register", response_model=FrontendAuthResponse, status_code=status.HTTP_201_CREATED)
+def register_frontend_user(
+    payload: FrontendUserRegisterRequest, db: Session = Depends(get_db)
+) -> FrontendAuthResponse:
+    data = sanitize_frontend_register_input(payload)
+    duplicate = (
+        db.query(FrontendUser)
+        .filter((FrontendUser.username == data["username"]) | (FrontendUser.email == data["email"]))
+        .first()
+    )
+    if duplicate:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="用户名或邮箱已存在")
+
+    now = current_time()
+    user = FrontendUser(
+        username=data["username"],
+        email=data["email"],
+        passwordHash=hash_password(data["password"]),
+        nickname=data["nickname"],
+        avatar="",
+        bio=None,
+        status="active",
+        lastLoginAt=now,
+        createdAt=now,
+        updatedAt=now,
+    )
+    db.add(user)
+    db.commit()
+    return FrontendAuthResponse.model_validate(login_frontend(data["username"], data["password"], db))
+
+
+@app.post("/api/users/login", response_model=FrontendAuthResponse)
+def frontend_user_login(payload: FrontendUserLoginRequest, db: Session = Depends(get_db)) -> FrontendAuthResponse:
+    account = payload.account.strip().lower()
+    password = payload.password.strip()
+    if not account or not password:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="账号和密码不能为空")
+    return FrontendAuthResponse.model_validate(login_frontend(account, password, db))
+
+
+@app.get("/api/users/me", response_model=FrontendUserProfileOut)
+def frontend_user_me(session: dict = Depends(require_frontend_auth), db: Session = Depends(get_db)) -> FrontendUserProfileOut:
+    user = db.query(FrontendUser).filter(FrontendUser.id == session["id"]).first()
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="用户不存在")
+    return FrontendUserProfileOut.model_validate(serialize_frontend_user(user))
+
+
 @app.get("/api/columns")
 def list_columns(db: Session = Depends(get_db)) -> dict:
     items = [
@@ -583,7 +805,12 @@ def list_articles(
 ) -> dict:
     query = (
         db.query(Article)
-        .options(joinedload(Article.column), joinedload(Article.tags))
+        .options(
+            joinedload(Article.column),
+            joinedload(Article.tags),
+            joinedload(Article.interactions),
+            joinedload(Article.comments),
+        )
         .filter(Article.status == "published")
         .order_by(Article.publishedAt.desc(), Article.id.desc())
     )
@@ -618,13 +845,164 @@ def list_articles(
 def get_article(slug: str, db: Session = Depends(get_db)) -> ArticleOut:
     article = (
         db.query(Article)
-        .options(joinedload(Article.column), joinedload(Article.tags))
+        .options(
+            joinedload(Article.column),
+            joinedload(Article.tags),
+            joinedload(Article.interactions),
+            joinedload(Article.comments),
+        )
         .filter(Article.slug == slug, Article.status == "published")
         .first()
     )
     if not article:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
     return ArticleOut.model_validate(serialize_article(article))
+
+
+@app.get("/api/articles/{slug}/engagement", response_model=ArticleEngagementResponse)
+def get_article_engagement_summary(slug: str, db: Session = Depends(get_db)) -> ArticleEngagementResponse:
+    article = db.query(Article).filter(Article.slug == slug, Article.status == "published").first()
+    if not article:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+    return ArticleEngagementResponse.model_validate(get_article_engagement(article, db))
+
+
+@app.post("/api/articles/{slug}/interactions", response_model=ArticleInteractionResponse)
+def create_article_interaction(
+    slug: str,
+    payload: ArticleInteractionRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> ArticleInteractionResponse:
+    article = db.query(Article).filter(Article.slug == slug, Article.status == "published").first()
+    if not article:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+
+    interaction_type = payload.interactionType.strip().lower()
+    if interaction_type not in {"like", "favorite"}:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="interactionType 仅支持 like / favorite")
+
+    client_ip = get_request_ip(request)
+    frontend_session = get_frontend_session(request.headers.get("authorization"))
+    frontend_user = resolve_frontend_user(frontend_session, db)
+    existing_query = db.query(ArticleInteraction).filter(
+        ArticleInteraction.articleId == article.id,
+        ArticleInteraction.interactionType == interaction_type,
+    )
+    if frontend_user:
+        existing_query = existing_query.filter(ArticleInteraction.userId == frontend_user.id)
+    else:
+        existing_query = existing_query.filter(
+            ArticleInteraction.userId.is_(None),
+            ArticleInteraction.clientIp == client_ip,
+        )
+    existing = existing_query.first()
+
+    applied = False
+    active = True
+    now = datetime.utcnow()
+    if existing:
+        if frontend_user:
+            existing.isCanceled = not existing.isCanceled
+            existing.updatedAt = now
+            active = not existing.isCanceled
+            applied = active
+            if interaction_type == "like":
+                article.likeCount = max(0, article.likeCount + (1 if active else -1))
+            article.updatedAt = now
+            db.commit()
+            db.refresh(article)
+        else:
+            active = not existing.isCanceled
+    else:
+        db.add(
+            ArticleInteraction(
+                articleId=article.id,
+                userId=frontend_user.id if frontend_user else None,
+                interactionType=interaction_type,
+                clientIp=client_ip,
+                isCanceled=False,
+                createdAt=now,
+                updatedAt=now,
+            )
+        )
+        if interaction_type == "like":
+            article.likeCount += 1
+        article.updatedAt = now
+        db.commit()
+        db.refresh(article)
+        applied = True
+
+    stats = get_article_engagement(article, db)
+    return ArticleInteractionResponse.model_validate(
+        {
+            "ok": True,
+            "interactionType": interaction_type,
+            "applied": applied,
+            "active": active,
+            "articleSlug": article.slug,
+            **stats,
+        }
+    )
+
+
+@app.get("/api/articles/{slug}/comments", response_model=ArticleCommentListResponse)
+def list_article_comments(slug: str, db: Session = Depends(get_db)) -> ArticleCommentListResponse:
+    article = db.query(Article).filter(Article.slug == slug, Article.status == "published").first()
+    if not article:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+
+    items = (
+        db.query(ArticleComment)
+        .filter(
+            ArticleComment.articleId == article.id,
+            ArticleComment.status == "published",
+        )
+        .order_by(ArticleComment.createdAt.desc(), ArticleComment.id.desc())
+        .all()
+    )
+    serialized = [serialize_article_comment(item) for item in items]
+    return ArticleCommentListResponse.model_validate({"items": serialized, "total": len(serialized)})
+
+
+@app.post("/api/articles/{slug}/comments", response_model=ArticleCommentOut, status_code=status.HTTP_201_CREATED)
+def create_article_comment(
+    slug: str,
+    payload: ArticleCommentWrite,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> ArticleCommentOut:
+    article = db.query(Article).filter(Article.slug == slug, Article.status == "published").first()
+    if not article:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+
+    nickname = payload.nickname.strip() or "访客"
+    content = payload.content.strip()
+    if not content:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="评论内容不能为空")
+    if len(content) > 500:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="评论内容不能超过 500 字")
+    if len(nickname) > 50:
+        nickname = nickname[:50]
+
+    now = datetime.utcnow()
+    frontend_session = get_frontend_session(request.headers.get("authorization"))
+    frontend_user = resolve_frontend_user(frontend_session, db)
+    item = ArticleComment(
+        articleId=article.id,
+        userId=frontend_user.id if frontend_user else None,
+        nickname=frontend_user.nickname if frontend_user else nickname,
+        content=content,
+        clientIp=get_request_ip(request),
+        status="published",
+        createdAt=now,
+        updatedAt=now,
+    )
+    article.updatedAt = now
+    db.add(item)
+    db.commit()
+    db.refresh(item)
+    return ArticleCommentOut.model_validate(serialize_article_comment(item))
 
 
 @app.get("/api/site-configs")
@@ -713,7 +1091,15 @@ def bootstrap(db: Session = Depends(get_db)) -> dict:
     ]
     articles = [
         serialize_article(item)
-        for item in db.query(Article).options(joinedload(Article.column), joinedload(Article.tags)).order_by(Article.publishedAt.desc(), Article.id.desc()).all()
+        for item in db.query(Article)
+        .options(
+            joinedload(Article.column),
+            joinedload(Article.tags),
+            joinedload(Article.interactions),
+            joinedload(Article.comments),
+        )
+        .order_by(Article.publishedAt.desc(), Article.id.desc())
+        .all()
         if item.status == "published"
     ]
     projects = [
@@ -766,7 +1152,11 @@ def get_page_config(page_key: str, db: Session = Depends(get_db)) -> PageConfigO
 def create_wishlist_item(payload: WishlistWrite, db: Session = Depends(get_db)) -> WishlistOut:
     data = sanitize_wishlist_input(payload)
     now = current_time()
+    frontend_user = None
+    if data.get("userId"):
+        frontend_user = db.query(FrontendUser).filter(FrontendUser.id == data["userId"]).first()
     item = WishlistItem(
+        userId=frontend_user.id if frontend_user else None,
         visitorId=data["visitorId"],
         projectSlug=data["projectSlug"] or None,
         projectName=data["projectName"] or None,
@@ -804,6 +1194,7 @@ def create_community_lead(payload: CommunityLeadWrite, db: Session = Depends(get
     data = sanitize_community_lead_input(payload)
     now = current_time()
     item = CommunityLead(
+        userId=data.get("userId"),
         leadType=data["leadType"],
         intentReason=data["intentReason"],
         name=data["name"] or None,
@@ -825,6 +1216,7 @@ def create_beta_application(payload: BetaApplicationWrite, db: Session = Depends
     data = sanitize_beta_application_input(payload)
     now = current_time()
     item = BetaApplication(
+        userId=data.get("userId"),
         projectSlug=data["projectSlug"] or None,
         sourcePage=data["sourcePage"],
         roleType=data["roleType"],
@@ -1364,6 +1756,7 @@ def admin_dashboard(_: dict = Depends(require_auth), db: Session = Depends(get_d
     ads_total = db.query(AdItem).count()
     site_configs_total = db.query(SiteConfig).count()
     page_configs_total = db.query(PageConfig).count()
+    frontend_users_total = db.query(FrontendUser).count()
     wishlist_items = db.query(WishlistItem).all()
     community_leads = db.query(CommunityLead).all()
     beta_applications = db.query(BetaApplication).all()
@@ -1406,6 +1799,7 @@ def admin_dashboard(_: dict = Depends(require_auth), db: Session = Depends(get_d
                 "ads": ads_total,
                 "siteConfigs": site_configs_total,
                 "pageConfigs": page_configs_total,
+                "frontendUsers": frontend_users_total,
                 "wishlistItems": len(wishlist_items),
                 "communityLeads": len(community_leads),
                 "betaApplications": len(beta_applications),
@@ -1422,6 +1816,96 @@ def admin_dashboard(_: dict = Depends(require_auth), db: Session = Depends(get_d
             },
             "leads": {"byStatus": leads_by_status, "byType": leads_by_type},
             "beta": {"byStatus": beta_by_status, "byRole": beta_by_role},
+        }
+    )
+
+
+@app.get("/api/admin/frontend-users")
+def list_admin_frontend_users(
+    q: str = Query(default=""),
+    statusValue: str = Query(default=""),
+    _: dict = Depends(require_auth),
+    db: Session = Depends(get_db),
+) -> dict:
+    query = db.query(FrontendUser).order_by(FrontendUser.createdAt.desc(), FrontendUser.id.desc())
+    if q.strip():
+        keyword = f"%{q.strip().lower()}%"
+        query = query.filter(
+            (FrontendUser.username.like(keyword))
+            | (FrontendUser.email.like(keyword))
+            | (FrontendUser.nickname.like(keyword))
+        )
+    if statusValue.strip():
+        query = query.filter(FrontendUser.status == statusValue.strip())
+
+    items = []
+    for user in query.all():
+        items.append(
+            {
+                **serialize_frontend_user(user),
+                "wishlistCount": db.query(WishlistItem).filter(WishlistItem.userId == user.id).count(),
+                "likeCount": db.query(ArticleInteraction).filter(
+                    ArticleInteraction.userId == user.id,
+                    ArticleInteraction.interactionType == "like",
+                    ArticleInteraction.isCanceled == False,
+                ).count(),
+                "favoriteCount": db.query(ArticleInteraction).filter(
+                    ArticleInteraction.userId == user.id,
+                    ArticleInteraction.interactionType == "favorite",
+                    ArticleInteraction.isCanceled == False,
+                ).count(),
+                "commentCount": db.query(ArticleComment).filter(ArticleComment.userId == user.id).count(),
+                "betaApplicationCount": db.query(BetaApplication).filter(BetaApplication.userId == user.id).count(),
+                "communityLeadCount": db.query(CommunityLead).filter(CommunityLead.userId == user.id).count(),
+            }
+        )
+    return {"items": items, "total": len(items)}
+
+
+@app.put("/api/admin/frontend-users/{user_id}", response_model=FrontendUserListItem)
+def update_admin_frontend_user(
+    user_id: int,
+    payload: FrontendUserUpdate,
+    _: dict = Depends(require_auth),
+    db: Session = Depends(get_db),
+) -> FrontendUserListItem:
+    user = db.query(FrontendUser).filter(FrontendUser.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+
+    email = payload.email.strip().lower() or user.email
+    if not EMAIL_RE.match(email):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="邮箱格式不正确")
+    duplicate = db.query(FrontendUser).filter(FrontendUser.email == email, FrontendUser.id != user_id).first()
+    if duplicate:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="邮箱已存在")
+
+    user.nickname = payload.nickname.strip() or user.nickname
+    user.email = email
+    user.avatar = payload.avatar.strip()
+    user.bio = payload.bio.strip() or None
+    user.status = payload.status.strip() or user.status
+    user.updatedAt = current_time()
+    db.commit()
+    db.refresh(user)
+
+    return FrontendUserListItem.model_validate(
+        {
+            **serialize_frontend_user(user),
+            "wishlistCount": db.query(WishlistItem).filter(WishlistItem.userId == user.id).count(),
+            "likeCount": db.query(ArticleInteraction).filter(
+                ArticleInteraction.userId == user.id,
+                ArticleInteraction.interactionType == "like",
+                ArticleInteraction.isCanceled == False,
+            ).count(),
+            "favoriteCount": db.query(ArticleInteraction).filter(
+                ArticleInteraction.userId == user.id,
+                ArticleInteraction.interactionType == "favorite",
+                ArticleInteraction.isCanceled == False,
+            ).count(),
+            "commentCount": db.query(ArticleComment).filter(ArticleComment.userId == user.id).count(),
+            "betaApplicationCount": db.query(BetaApplication).filter(BetaApplication.userId == user.id).count(),
+            "communityLeadCount": db.query(CommunityLead).filter(CommunityLead.userId == user.id).count(),
         }
     )
 
