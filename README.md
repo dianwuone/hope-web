@@ -262,7 +262,10 @@ HUSKY=0 VITE_DEPLOY_MODE=server pnpm build
 - `脚本目录` 是 `deploy.sh` 自己所在的位置
 - `部署目录` 是脚本实际使用的 `APP_DIR`
 
-如果两者明显不对应，比如脚本在 `/www/wwwroot/code/kuntin/backend/deploy.sh`，但日志里 `部署目录` 却是 `/www/wwwroot/kuntin`，说明宝塔计划任务、环境变量或外层脚本覆盖了 `APP_DIR`。这会让锁文件、日志、虚拟环境都写到错误目录，必须先把 `APP_DIR` 改回真实后端目录。
+脚本目录和部署目录可以相同，也可以不同。
+
+- 如果你采用“脚本仓库”和“运行部署目录”分离的方式，例如脚本在 `/www/wwwroot/code/kuntin/backend/deploy.sh`，但实际部署目录是 `/www/wwwroot/kuntin`，那么这种差异是正常的，锁目录也应该落在部署目录下。
+- 只有在这两个路径和你的预期不一致时，才说明宝塔计划任务、环境变量或外层脚本可能覆盖了 `APP_DIR`。这会让锁文件、日志、虚拟环境写到错误目录，需要把 `APP_DIR` 改回真实运行目录。
 
 新版脚本会自动识别并清理陈旧锁；如果你需要手动处理，先确认没有正在运行的部署进程：
 
@@ -276,4 +279,4 @@ ps -ef | grep deploy.sh
 rm -rf /www/wwwroot/code/kuntin/backend/.deploy-state/deploy.lock
 ```
 
-如果你的实际 `APP_DIR` 不是默认值，请把上面的路径替换成日志里 `部署目录` 对应的 `.deploy-state/deploy.lock`。
+如果你的实际 `APP_DIR` 不是默认值，请把上面的路径替换成日志里 `部署目录` 对应的 `.deploy-state/deploy.lock`。例如脚本路径是 `/www/wwwroot/code/kuntin/backend/deploy.sh`，但 `APP_DIR=/www/wwwroot/kuntin`，那么锁目录就是 `/www/wwwroot/kuntin/.deploy-state/deploy.lock`。
