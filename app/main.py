@@ -163,6 +163,10 @@ def parse_json_dict(value: str) -> dict:
 
 
 def parse_config_value(value: str, fallback):
+    raw_value = (value or "").strip()
+    if not raw_value:
+        return fallback
+
     parsed = parse_json_dict(value)
     if parsed:
         if isinstance(parsed, dict) and set(parsed.keys()) == {"value"}:
@@ -171,7 +175,12 @@ def parse_config_value(value: str, fallback):
     parsed_list = parse_json_list(value)
     if parsed_list:
         return parsed_list
-    return fallback
+    return raw_value
+
+
+def is_public_status(value: str | None) -> bool:
+    normalized = (value or "").strip().lower()
+    return normalized not in {"draft", "inactive", "archived", "disabled", "deleted"}
 
 
 EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
@@ -551,13 +560,17 @@ def admin_login(payload: UserLoginRequest, db: Session = Depends(get_db)) -> Log
 
 @app.get("/api/columns")
 def list_columns(db: Session = Depends(get_db)) -> dict:
-    items = db.query(ContentCategory).order_by(ContentCategory.sortOrder.asc(), ContentCategory.id.asc()).all()
+    items = [
+        item
+        for item in db.query(ContentCategory).order_by(ContentCategory.sortOrder.asc(), ContentCategory.id.asc()).all()
+        if is_public_status(item.status)
+    ]
     return {"items": [serialize_column(item) for item in items], "total": len(items)}
 
 
 @app.get("/api/tags")
 def list_tags(db: Session = Depends(get_db)) -> dict:
-    items = db.query(ContentTag).order_by(ContentTag.id.asc()).all()
+    items = [item for item in db.query(ContentTag).order_by(ContentTag.id.asc()).all() if is_public_status(item.status)]
     return {"items": [serialize_tag(item) for item in items], "total": len(items)}
 
 
@@ -571,6 +584,7 @@ def list_articles(
     query = (
         db.query(Article)
         .options(joinedload(Article.column), joinedload(Article.tags))
+        .filter(Article.status == "published")
         .order_by(Article.publishedAt.desc(), Article.id.desc())
     )
 
@@ -605,7 +619,7 @@ def get_article(slug: str, db: Session = Depends(get_db)) -> ArticleOut:
     article = (
         db.query(Article)
         .options(joinedload(Article.column), joinedload(Article.tags))
-        .filter(Article.slug == slug)
+        .filter(Article.slug == slug, Article.status == "published")
         .first()
     )
     if not article:
@@ -627,7 +641,7 @@ def list_projects(projectType: str = Query(default=""), db: Session = Depends(ge
     query = db.query(Project).order_by(Project.id.asc())
     if projectType.strip():
         query = query.filter(Project.projectType == projectType.strip())
-    items = [serialize_project(item) for item in query.all()]
+    items = [serialize_project(item) for item in query.all() if is_public_status(item.status)]
     return {"items": items, "total": len(items)}
 
 
@@ -636,12 +650,18 @@ def get_project(slug: str, db: Session = Depends(get_db)) -> ProjectOut:
     item = db.query(Project).filter(Project.slug == slug).first()
     if not item:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+    if not is_public_status(item.status):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
     return ProjectOut.model_validate(serialize_project(item))
 
 
 @app.get("/api/offers")
 def list_offers(db: Session = Depends(get_db)) -> dict:
-    items = [serialize_offer(item) for item in db.query(Offer).order_by(Offer.id.asc()).all()]
+    items = [
+        serialize_offer(item)
+        for item in db.query(Offer).order_by(Offer.id.asc()).all()
+        if is_public_status(item.status)
+    ]
     return {"items": items, "total": len(items)}
 
 
@@ -649,6 +669,8 @@ def list_offers(db: Session = Depends(get_db)) -> dict:
 def get_offer(slug: str, db: Session = Depends(get_db)) -> OfferOut:
     item = db.query(Offer).filter(Offer.slug == slug).first()
     if not item:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+    if not is_public_status(item.status):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
     return OfferOut.model_validate(serialize_offer(item))
 
@@ -665,17 +687,45 @@ def list_ads(
 
 @app.get("/api/bootstrap")
 def bootstrap(db: Session = Depends(get_db)) -> dict:
-    page_configs = db.query(PageConfig).order_by(PageConfig.pageKey.asc()).all()
-    site_configs = {item.configKey: item for item in db.query(SiteConfig).all()}
+    page_configs = [
+        item
+        for item in db.query(PageConfig).order_by(PageConfig.pageKey.asc()).all()
+        if is_public_status(item.status)
+    ]
+    site_config_rows = db.query(SiteConfig).order_by(SiteConfig.updatedAt.desc(), SiteConfig.id.desc()).all()
+    site_configs: dict[str, SiteConfig] = {}
+    site_config_values: dict[str, object] = {}
+    for item in site_config_rows:
+        if item.configKey in site_configs:
+            continue
+        site_configs[item.configKey] = item
+        site_config_values[item.configKey] = parse_config_value(item.configValue, "")
     active_ads = fetch_active_ads(db)
-    columns = [serialize_column(item) for item in db.query(ContentCategory).order_by(ContentCategory.sortOrder.asc(), ContentCategory.id.asc()).all()]
-    tags = [serialize_tag(item) for item in db.query(ContentTag).order_by(ContentTag.id.asc()).all()]
+    columns = [
+        serialize_column(item)
+        for item in db.query(ContentCategory).order_by(ContentCategory.sortOrder.asc(), ContentCategory.id.asc()).all()
+        if is_public_status(item.status)
+    ]
+    tags = [
+        serialize_tag(item)
+        for item in db.query(ContentTag).order_by(ContentTag.id.asc()).all()
+        if is_public_status(item.status)
+    ]
     articles = [
         serialize_article(item)
         for item in db.query(Article).options(joinedload(Article.column), joinedload(Article.tags)).order_by(Article.publishedAt.desc(), Article.id.desc()).all()
+        if item.status == "published"
     ]
-    projects = [serialize_project(item) for item in db.query(Project).order_by(Project.id.asc()).all()]
-    offers = [serialize_offer(item) for item in db.query(Offer).order_by(Offer.id.asc()).all()]
+    projects = [
+        serialize_project(item)
+        for item in db.query(Project).order_by(Project.id.asc()).all()
+        if is_public_status(item.status)
+    ]
+    offers = [
+        serialize_offer(item)
+        for item in db.query(Offer).order_by(Offer.id.asc()).all()
+        if is_public_status(item.status)
+    ]
 
     return {
         "site": {
@@ -687,6 +737,7 @@ def bootstrap(db: Session = Depends(get_db)) -> dict:
             "articleHotTopics": parse_config_value(site_configs.get("article_hot_topics").configValue if site_configs.get("article_hot_topics") else "", []),
             "contactEmail": parse_config_value(site_configs.get("contact_email").configValue if site_configs.get("contact_email") else "", ""),
             "communityWechat": parse_config_value(site_configs.get("community_wechat").configValue if site_configs.get("community_wechat") else "", ""),
+            "siteConfigs": site_config_values,
         },
         "pages": {item.pageKey: parse_json_dict(item.configJson) for item in page_configs},
         "content": {
@@ -705,6 +756,8 @@ def bootstrap(db: Session = Depends(get_db)) -> dict:
 def get_page_config(page_key: str, db: Session = Depends(get_db)) -> PageConfigOut:
     item = db.query(PageConfig).filter(PageConfig.pageKey == page_key).first()
     if not item:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+    if not is_public_status(item.status):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
     return PageConfigOut.model_validate(serialize_page_config(item))
 
