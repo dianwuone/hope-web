@@ -185,30 +185,28 @@ $env:SQLITE_DB_PATH='D:\code\AI\kuntin\backend\data\app.db'
 
 ## 自动部署
 
-如果你把 `backend/` 推到第三方 GitHub 仓库，并希望服务器每天自动拉取最新代码并部署，推荐把脚本复制到运行仓库外面：
+如果你把 `backend/` 推到第三方 GitHub 仓库，并希望服务器每天自动拉取最新代码并部署，可以直接执行部署脚本：
 
 ```bash
-mkdir -p /www/wwwroot/code/backend
-cp deploy.sh /www/wwwroot/code/backend/deploy.sh
-chmod +x /www/wwwroot/code/backend/deploy.sh
-bash /www/wwwroot/code/backend/deploy.sh
+chmod +x /www/wwwroot/code/kuntin/backend/deploy.sh
+bash /www/wwwroot/code/kuntin/backend/deploy.sh
 ```
 
-脚本默认把 `/www/wwwroot/kuntin` 当作后端运行目录。这个目录本身应该是 Git 仓库，里面包含 `app/`、`admin/`、`requirements.txt` 等后端文件。
+脚本默认把 `/www/wwwroot/code/kuntin/backend` 当作后端运行目录。这个目录本身应该是 Git 仓库，里面包含 `app/`、`admin/`、`requirements.txt` 等后端文件。
 
 这个脚本会做这些事：
 
 1. `git fetch` + `reset --hard` 到指定分支
 2. 按依赖清单判断是否需要更新 Python / 前端依赖
 3. 构建 `backend/admin`
-4. 重启后端服务（如果你配置了服务名或自定义命令）
+4. 重启后端；优先按宝塔项目名重启，找不到时再尝试服务名和 uvicorn 兜底
 
 ### 终端预安装建议
 
 首次部署或怀疑依赖不完整时，直接强制跑一次部署脚本即可：
 
 ```bash
-FORCE_INSTALL_DEPS=1 bash /www/wwwroot/code/backend/deploy.sh
+FORCE_INSTALL_DEPS=1 bash /www/wwwroot/code/kuntin/backend/deploy.sh
 ```
 
 之后自动部署脚本会根据 `requirements.txt`、`package.json` 和 `pnpm-lock.yaml` 的哈希判断是否需要重新安装。即使哈希相同，脚本也会检查关键 Python 包和 `admin/node_modules` 是否完整，不完整时会自动重新安装。
@@ -216,7 +214,7 @@ FORCE_INSTALL_DEPS=1 bash /www/wwwroot/code/backend/deploy.sh
 如果前端依赖下载太慢，可以在终端先执行一次更稳的安装：
 
 ```bash
-cd /www/wwwroot/kuntin/admin
+cd /www/wwwroot/code/kuntin/backend/admin
 pnpm install --frozen-lockfile --fetch-timeout 600000 --fetch-retries 10 --network-concurrency 1 --registry https://registry.npmmirror.com
 ```
 
@@ -231,15 +229,21 @@ HUSKY=0 VITE_DEPLOY_MODE=server pnpm build
 每天凌晨 3 点执行一次：
 
 ```cron
-0 3 * * * bash /www/wwwroot/code/backend/deploy.sh >> /www/wwwroot/code/backend/deploy.log 2>&1
+0 3 * * * bash /www/wwwroot/code/kuntin/backend/deploy.sh >> /www/wwwroot/code/kuntin/backend/deploy.log 2>&1
 ```
 
 ### 可选环境变量
 
-1. `APP_DIR`：默认 `/www/wwwroot/kuntin`
+1. `APP_DIR`：默认 `/www/wwwroot/code/kuntin/backend`
 2. `BRANCH`：默认 `main`
-3. `PYTHON_BIN`：默认 `python3`
+3. `PYTHON_BIN`：默认 `/usr/bin/python3`
 4. `SKIP_GIT_PULL`：设为 `1` 时跳过 Git 拉取
 5. `FORCE_INSTALL_DEPS`：设为 `1` 时强制重新检查并安装依赖
-6. `BACKEND_SERVICE_NAME`：默认 `kuntin-backend`，需要和宝塔 Python 项目名或服务名一致
-7. `RESTART_CMD`：自定义重启命令，优先于服务名
+6. `BT_PROJECT_NAME`：宝塔 Python 项目名称，比如 `kuntin`；设置后会优先尝试用 `/etc/init.d/<项目名>_pymanager` 重启
+7. `BT_PROJECT_SCRIPT`：如果你的宝塔项目启动脚本不在默认路径，可以显式指定
+8. `BACKEND_HOST`：默认 `127.0.0.1`
+9. `BACKEND_PORT`：默认 `4100`
+10. `UVICORN_APP`：默认 `app.main:app`
+11. `UVICORN_LOG`：默认 `$APP_DIR/uvicorn.log`
+12. `BACKEND_SERVICE_NAME`：默认留空；只有你确实配置了 supervisor/systemd 服务时才需要设置
+13. `RESTART_CMD`：自定义重启命令，优先于宝塔项目名、服务名和默认 uvicorn 重启

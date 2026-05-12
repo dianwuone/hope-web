@@ -2,11 +2,18 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-APP_DIR="${APP_DIR:-/www/wwwroot/kuntin}"
+APP_DIR="${APP_DIR:-/www/wwwroot/code/kuntin/backend}"
 BRANCH="${BRANCH:-main}"
-PYTHON_BIN="${PYTHON_BIN:-python3}"
+PYTHON_BIN="${PYTHON_BIN:-/usr/bin/python3}"
 RESTART_CMD="${RESTART_CMD:-}"
-BACKEND_SERVICE_NAME="${BACKEND_SERVICE_NAME:-kuntin-backend}"
+BACKEND_SERVICE_NAME="${BACKEND_SERVICE_NAME:-}"
+BT_PROJECT_NAME="${BT_PROJECT_NAME:-}"
+BT_PROJECT_SCRIPT="${BT_PROJECT_SCRIPT:-}"
+BT_PROJECT_SCRIPT_DIR="${BT_PROJECT_SCRIPT_DIR:-/etc/init.d}"
+BACKEND_HOST="${BACKEND_HOST:-127.0.0.1}"
+BACKEND_PORT="${BACKEND_PORT:-4100}"
+UVICORN_APP="${UVICORN_APP:-app.main:app}"
+UVICORN_LOG="${UVICORN_LOG:-$APP_DIR/uvicorn.log}"
 REPO_URL="${REPO_URL:-}"
 SKIP_GIT_PULL="${SKIP_GIT_PULL:-0}"
 FORCE_INSTALL_DEPS="${FORCE_INSTALL_DEPS:-0}"
@@ -145,35 +152,158 @@ restart_backend() {
     return
   fi
 
-  if [[ -z "$BACKEND_SERVICE_NAME" ]]; then
-    log "未配置重启命令，跳过自动重启"
+  if restart_bt_project; then
     return
   fi
 
-  if command -v supervisorctl >/dev/null 2>&1; then
-    if supervisorctl status "$BACKEND_SERVICE_NAME" >/dev/null 2>&1; then
-      log "重启 supervisor 服务: $BACKEND_SERVICE_NAME"
-      supervisorctl restart "$BACKEND_SERVICE_NAME"
-      return
+  if [[ -n "$BACKEND_SERVICE_NAME" ]]; then
+    if command -v supervisorctl >/dev/null 2>&1; then
+      if supervisorctl status "$BACKEND_SERVICE_NAME" >/dev/null 2>&1; then
+        log "重启 supervisor 服务: $BACKEND_SERVICE_NAME"
+        supervisorctl restart "$BACKEND_SERVICE_NAME"
+        return
+      fi
+
+      if supervisorctl status 2>/dev/null | awk '{print $1}' | grep -Eq "^${BACKEND_SERVICE_NAME}(:|$)"; then
+        log "重启 supervisor 服务组: $BACKEND_SERVICE_NAME"
+        supervisorctl restart "$BACKEND_SERVICE_NAME:*"
+        return
+      fi
     fi
 
-    if supervisorctl status 2>/dev/null | awk '{print $1}' | grep -Eq "^${BACKEND_SERVICE_NAME}(:|$)"; then
-      log "重启 supervisor 服务组: $BACKEND_SERVICE_NAME"
-      supervisorctl restart "$BACKEND_SERVICE_NAME:*"
-      return
+    if command -v systemctl >/dev/null 2>&1; then
+      if systemctl list-unit-files "${BACKEND_SERVICE_NAME}.service" --no-legend 2>/dev/null | grep -q . ||
+        systemctl list-units --all "${BACKEND_SERVICE_NAME}.service" --no-legend 2>/dev/null | grep -q .; then
+        log "重启 systemd 服务: $BACKEND_SERVICE_NAME"
+        systemctl restart "$BACKEND_SERVICE_NAME"
+        return
+      fi
+    fi
+
+    log "未找到可重启的服务: $BACKEND_SERVICE_NAME，改用 uvicorn 命令重启"
+  else
+    log "未配置服务名，改用 uvicorn 命令重启"
+  fi
+
+  restart_uvicorn_backend
+}
+
+resolve_bt_project_script() {
+  if [[ -n "$BT_PROJECT_SCRIPT" ]]; then
+    [[ -f "$BT_PROJECT_SCRIPT" ]] || return 1
+    printf '%s\n' "$BT_PROJECT_SCRIPT"
+    return 0
+  fi
+
+  [[ -n "$BT_PROJECT_NAME" ]] || return 1
+
+  local candidate="$BT_PROJECT_SCRIPT_DIR/${BT_PROJECT_NAME}_pymanager"
+  [[ -f "$candidate" ]] || return 1
+  printf '%s\n' "$candidate"
+}
+
+backend_process_pattern() {
+  printf 'uvicorn %s.*--port %s' "$UVICORN_APP" "$BACKEND_PORT"
+}
+
+stop_uvicorn_backend() {
+  local pattern
+  pattern="$(backend_process_pattern)"
+  local pids=()
+  local pid
+
+  if command -v pgrep >/dev/null 2>&1; then
+    mapfile -t pids < <(pgrep -f "$pattern" || true)
+    for pid in "${pids[@]}"; do
+      if [[ -n "$pid" && "$pid" != "$$" ]]; then
+        log "停止旧 uvicorn 进程: $pid"
+        kill "$pid" 2>/dev/null || true
+      fi
+    done
+
+    sleep 1
+
+    mapfile -t pids < <(pgrep -f "$pattern" || true)
+    for pid in "${pids[@]}"; do
+      if [[ -n "$pid" && "$pid" != "$$" ]]; then
+        log "强制停止旧 uvicorn 进程: $pid"
+        kill -9 "$pid" 2>/dev/null || true
+      fi
+    done
+    return
+  fi
+
+  pkill -f "$pattern" 2>/dev/null || true
+  sleep 1
+}
+
+wait_backend_started() {
+  local pattern
+  pattern="$(backend_process_pattern)"
+  local started_pid=""
+
+  sleep 2
+
+  if command -v pgrep >/dev/null 2>&1; then
+    started_pid="$(pgrep -f "$pattern" | head -n 1 || true)"
+  fi
+
+  if [[ -n "$started_pid" ]]; then
+    log "uvicorn 已启动，PID: $started_pid，日志: $UVICORN_LOG"
+    return
+  fi
+
+  if command -v ss >/dev/null 2>&1 && ss -ltn "( sport = :$BACKEND_PORT )" 2>/dev/null | grep -q LISTEN; then
+    log "后端端口已监听: $BACKEND_HOST:$BACKEND_PORT，日志: $UVICORN_LOG"
+    return
+  fi
+
+  fail "uvicorn 启动失败，请查看日志: $UVICORN_LOG"
+}
+
+restart_bt_project() {
+  local project_script project_service
+  project_script="$(resolve_bt_project_script)" || return 1
+  project_service="$(basename "$project_script")"
+
+  log "使用宝塔 Python 项目重启: ${BT_PROJECT_NAME:-$project_service}"
+
+  if command -v service >/dev/null 2>&1; then
+    if service "$project_service" restart >/dev/null 2>&1; then
+      wait_backend_started
+      return 0
     fi
   fi
 
-  if command -v systemctl >/dev/null 2>&1; then
-    if systemctl list-unit-files "${BACKEND_SERVICE_NAME}.service" --no-legend 2>/dev/null | grep -q . ||
-      systemctl list-units --all "${BACKEND_SERVICE_NAME}.service" --no-legend 2>/dev/null | grep -q .; then
-      log "重启 systemd 服务: $BACKEND_SERVICE_NAME"
-      systemctl restart "$BACKEND_SERVICE_NAME"
-      return
-    fi
+  stop_uvicorn_backend
+  bash "$project_script"
+  wait_backend_started
+  return 0
+}
+
+start_uvicorn_backend() {
+  local started_pid
+
+  mkdir -p "$(dirname "$UVICORN_LOG")"
+  log "启动 uvicorn: $PYTHON_BIN -m uvicorn $UVICORN_APP --host $BACKEND_HOST --port $BACKEND_PORT --app-dir $APP_DIR"
+  nohup "$PYTHON_BIN" -m uvicorn "$UVICORN_APP" \
+    --host "$BACKEND_HOST" \
+    --port "$BACKEND_PORT" \
+    --app-dir "$APP_DIR" \
+    >> "$UVICORN_LOG" 2>&1 &
+  started_pid=$!
+
+  sleep 2
+  if ! kill -0 "$started_pid" 2>/dev/null; then
+    fail "uvicorn 启动失败，请查看日志: $UVICORN_LOG"
   fi
 
-  fail "未找到可重启的服务: $BACKEND_SERVICE_NAME。请确认宝塔 Python 项目名，或设置 RESTART_CMD。"
+  log "uvicorn 已启动，PID: $started_pid，日志: $UVICORN_LOG"
+}
+
+restart_uvicorn_backend() {
+  stop_uvicorn_backend
+  start_uvicorn_backend
 }
 
 resolve_python_runtime() {
