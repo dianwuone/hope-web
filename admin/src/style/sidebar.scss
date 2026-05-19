@@ -162,11 +162,49 @@
       }
     }
 
+    .sidebar-menu-item--root,
+    .sidebar-sub-menu--root > .el-sub-menu__title {
+      margin: 6px 10px;
+      font-weight: 600;
+      border-radius: 10px;
+    }
+
+    .sidebar-menu-item--nested,
+    .sidebar-sub-menu--nested > .el-sub-menu__title,
+    .sidebar-sub-menu--root .el-menu .el-menu-item,
+    .sidebar-sub-menu--root .el-menu .el-sub-menu__title {
+      height: 44px;
+      margin: 4px 10px 4px 24px;
+      padding-left: 18px !important;
+      font-size: 13px;
+      line-height: 44px;
+      background: rgb(15 23 42 / 4%) !important;
+      border-radius: 8px;
+
+      div,
+      span {
+        height: 44px;
+        line-height: 44px;
+      }
+    }
+
     .submenu-title-noDropdown,
     .el-sub-menu__title {
       &:hover {
         background-color: transparent;
       }
+    }
+
+    .sidebar-menu-item--root:hover,
+    .sidebar-sub-menu--root > .el-sub-menu__title:hover {
+      background: rgb(15 23 42 / 4%) !important;
+    }
+
+    .sidebar-menu-item--nested:hover,
+    .sidebar-sub-menu--nested > .el-sub-menu__title:hover,
+    .sidebar-sub-menu--root .el-menu .el-menu-item:hover,
+    .sidebar-sub-menu--root .el-menu .el-sub-menu__title:hover {
+      background: rgb(15 23 42 / 7%) !important;
     }
 
     .is-active > .el-sub-menu__title,
@@ -186,19 +224,16 @@
 
     .el-menu-item.is-active.nest-menu::before {
       position: absolute;
-      inset: 0 8px;
+      inset: 0;
       clear: both;
-      margin: 4px 0;
       content: "";
       background: var(--el-color-primary) !important;
-      border-radius: 3px;
+      border-radius: 8px;
     }
 
     .el-menu .el-menu--inline .el-sub-menu__title,
     & .el-sub-menu .el-menu-item {
       min-width: $sideBarWidth !important;
-      font-size: 14px;
-      background-color: var(--pure-theme-sub-menu-bg) !important;
     }
 
     /* 有子集的激活菜单左侧小竖条 */
@@ -235,12 +270,11 @@
 
     .is-active.submenu-title-noDropdown.outer-most::before {
       position: absolute;
-      inset: 0 8px;
+      inset: 0;
       clear: both;
-      margin: 4px 0;
       content: "";
       background: var(--el-color-primary) !important;
-      border-radius: 3px;
+      border-radius: 10px;
     }
   }
 

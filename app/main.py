@@ -3,14 +3,18 @@ from __future__ import annotations
 import asyncio
 import json
 from datetime import datetime
+from hashlib import sha256
 import re
+from secrets import randbelow
+from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, RedirectResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from sqlalchemy import text
+from sqlalchemy import inspect, text
 from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.schema import CreateColumn
 
 from .auth import login as do_login
 from .auth import get_frontend_session, hash_password, login_frontend, require_auth, require_frontend_auth
@@ -24,16 +28,21 @@ from .models import (
     CommunityLead,
     ContentCategory,
     ContentTag,
+    EmailVerificationCode,
     FrontendUser,
     Offer,
     PageConfig,
     Project,
+    ReadingHistory,
     SiteConfig,
     WishlistItem,
 )
 from .schemas import (
     AdItemOut,
     AdItemWrite,
+    AiContentPublishRequest,
+    AiContentPublishResponse,
+    AdminEmailNotificationRequest,
     ArticleCommentListResponse,
     ArticleCommentOut,
     ArticleCommentWrite,
@@ -50,10 +59,18 @@ from .schemas import (
     CommunityLeadUpdate,
     CommunityLeadWrite,
     DashboardResponse,
+    DatabaseSyncRequest,
+    DatabaseSyncResponse,
     DeleteResponse,
+    EmailVerificationSendResponse,
     FrontendAuthResponse,
     FrontendUserListItem,
     FrontendUserLoginRequest,
+    FrontendProfileSummary,
+    FrontendUserPasswordChangeRequest,
+    FrontendUserPasswordResetRequest,
+    FrontendUserProfileUpdate,
+    FrontendUserPasswordResetCodeRequest,
     FrontendUserProfileOut,
     FrontendUserRegisterRequest,
     FrontendUserUpdate,
@@ -65,6 +82,9 @@ from .schemas import (
     PageConfigWrite,
     ProjectOut,
     ProjectWrite,
+    ReadingHistoryOut,
+    ReadingHistoryWrite,
+    SearchResponse,
     SiteConfigOut,
     SiteConfigWrite,
     UserLoginRequest,
@@ -72,6 +92,7 @@ from .schemas import (
     WishlistUpdate,
     WishlistWrite,
 )
+from .mail import get_mail_settings, send_email
 from .timeutils import current_time, current_timestamp_ms
 from .seed import seed_if_empty
 from .security import (
@@ -131,7 +152,26 @@ FRONTEND_USER_TABLE_PATCHES = {
         "ALTER TABLE article_comments ADD COLUMN userId INTEGER",
         "CREATE INDEX IF NOT EXISTS ix_article_comments_userId ON article_comments (userId)",
     ],
+    "email_verification_codes": [
+        "CREATE TABLE email_verification_codes (id INTEGER PRIMARY KEY, userId INTEGER, email VARCHAR(100) NOT NULL, purpose VARCHAR(50) NOT NULL, codeHash VARCHAR(255) NOT NULL, expiresAt DATETIME NOT NULL, usedAt DATETIME, createdAt DATETIME NOT NULL)",
+        "CREATE INDEX IF NOT EXISTS ix_email_verification_codes_userId ON email_verification_codes (userId)",
+        "CREATE INDEX IF NOT EXISTS ix_email_verification_codes_email ON email_verification_codes (email)",
+        "CREATE INDEX IF NOT EXISTS ix_email_verification_codes_purpose ON email_verification_codes (purpose)",
+        "CREATE INDEX IF NOT EXISTS ix_email_verification_codes_expiresAt ON email_verification_codes (expiresAt)",
+    ],
+    "frontend_users.signature": [
+        "ALTER TABLE frontend_users ADD COLUMN signature TEXT NOT NULL DEFAULT ''",
+    ],
+    "reading_histories": [
+        "CREATE TABLE reading_histories (id INTEGER PRIMARY KEY, userId INTEGER NOT NULL, articleSlug VARCHAR(150) NOT NULL, articleTitle VARCHAR(200) NOT NULL DEFAULT '', articleSummary TEXT, coverImage VARCHAR(255) NOT NULL DEFAULT '', authorName VARCHAR(50) NOT NULL DEFAULT '', categoryName VARCHAR(100) NOT NULL DEFAULT '', viewedAt DATETIME NOT NULL, createdAt DATETIME NOT NULL, updatedAt DATETIME NOT NULL)",
+        "CREATE INDEX IF NOT EXISTS ix_reading_histories_userId ON reading_histories (userId)",
+        "CREATE INDEX IF NOT EXISTS ix_reading_histories_articleSlug ON reading_histories (articleSlug)",
+        "CREATE INDEX IF NOT EXISTS ix_reading_histories_viewedAt ON reading_histories (viewedAt)",
+    ],
 }
+
+EMAIL_CODE_EXPIRES_SECONDS = 10 * 60
+EMAIL_CODE_PURPOSE_RESET_PASSWORD = "reset_password"
 
 
 def serialize_column(column: ContentCategory | None) -> dict | None:
@@ -318,6 +358,131 @@ def serialize_offer(item: Offer) -> dict:
     }
 
 
+def resolve_project_route(item: Project) -> str:
+    extra = parse_json_dict(item.extraJson)
+    route = ""
+    if isinstance(extra, dict):
+        route = (extra.get("route") or "").strip()
+    if route:
+        return route
+    if item.projectType == "product":
+        return f"/products/{item.slug}"
+    if item.projectType == "lab":
+        return f"/lab/{item.slug}"
+    if item.projectType == "game":
+        return f"/games/{item.slug}"
+    return f"/projects/{item.slug}"
+
+
+def normalize_search_text(*parts: object) -> str:
+    values: list[str] = []
+    for part in parts:
+        if isinstance(part, str) and part.strip():
+            values.append(part.strip().lower())
+        elif isinstance(part, list):
+            for item in part:
+                if isinstance(item, str) and item.strip():
+                    values.append(item.strip().lower())
+    return "\n".join(values)
+
+
+def build_search_result_items(db: Session, keyword: str) -> list[dict]:
+    article_items: list[dict] = []
+    project_items: list[dict] = []
+    offer_items: list[dict] = []
+
+    article_query = (
+        db.query(Article)
+        .options(joinedload(Article.column), joinedload(Article.tags))
+        .filter(Article.status == "published")
+        .order_by(Article.publishedAt.desc(), Article.id.desc())
+    )
+    for article in article_query.all():
+        haystack = normalize_search_text(
+            article.title,
+            article.summary,
+            article.contentBody,
+            article.authorName,
+            article.column.name if article.column else "",
+            [tag.name for tag in article.tags],
+        )
+        if keyword and keyword not in haystack:
+            continue
+        article_items.append(
+            {
+                "type": "文章",
+                "title": article.title,
+                "summary": article.summary or "",
+                "slug": article.slug,
+                "to": f"/articles/{article.slug}",
+                "image": article.coverImage or "",
+                "source": article.column.name if article.column else "文章中心",
+                "publishedAt": article.publishedAt,
+            }
+        )
+
+    project_query = db.query(Project).order_by(Project.updatedAt.desc(), Project.id.desc())
+    for project in project_query.all():
+        if not is_public_status(project.status):
+            continue
+        haystack = normalize_search_text(
+            project.name,
+            project.title,
+            project.subtitle,
+            project.shortDesc,
+            project.summary,
+            project.description,
+            parse_json_list(project.tagsJson),
+            parse_json_list(project.featuresJson),
+            parse_json_list(project.highlightsJson),
+        )
+        if keyword and keyword not in haystack:
+            continue
+        type_label = {"product": "产品", "game": "游戏", "lab": "实验室"}.get(project.projectType, "项目")
+        source_label = {"product": "产品中心", "game": "游戏中心", "lab": "实验室"}.get(project.projectType, "项目")
+        project_items.append(
+            {
+                "type": type_label,
+                "title": project.name or project.title,
+                "summary": project.summary or project.shortDesc or project.description or "",
+                "slug": project.slug,
+                "to": resolve_project_route(project),
+                "image": project.coverImage or project.bannerImage or "",
+                "source": source_label,
+                "publishedAt": None,
+            }
+        )
+
+    offer_query = db.query(Offer).order_by(Offer.updatedAt.desc(), Offer.id.desc())
+    for offer in offer_query.all():
+        if not is_public_status(offer.status):
+            continue
+        haystack = normalize_search_text(
+            offer.title,
+            offer.subtitle,
+            offer.summary,
+            offer.category,
+            parse_json_list(offer.benefitsJson),
+            parse_json_list(offer.metaJson),
+        )
+        if keyword and keyword not in haystack:
+            continue
+        offer_items.append(
+            {
+                "type": "快来尝鲜",
+                "title": offer.title,
+                "summary": offer.summary or offer.subtitle or "",
+                "slug": offer.slug,
+                "to": f"/try/{offer.slug}",
+                "image": offer.bannerImage or "",
+                "source": "快来尝鲜",
+                "publishedAt": None,
+            }
+        )
+
+    return [*article_items, *project_items, *offer_items]
+
+
 def serialize_ad_item(item: AdItem) -> dict:
     return {
         "id": item.id,
@@ -388,10 +553,27 @@ def serialize_frontend_user(user: FrontendUser) -> dict:
         "nickname": user.nickname,
         "avatar": user.avatar or "",
         "bio": user.bio,
+        "signature": getattr(user, "signature", "") or "",
         "status": user.status,
         "lastLoginAt": user.lastLoginAt,
         "createdAt": user.createdAt,
         "updatedAt": user.updatedAt,
+    }
+
+
+def serialize_reading_history(item: ReadingHistory) -> dict:
+    return {
+        "id": item.id,
+        "userId": item.userId,
+        "articleSlug": item.articleSlug,
+        "articleTitle": item.articleTitle,
+        "articleSummary": item.articleSummary,
+        "coverImage": item.coverImage or "",
+        "authorName": item.authorName or "",
+        "categoryName": item.categoryName or "",
+        "viewedAt": item.viewedAt,
+        "createdAt": item.createdAt,
+        "updatedAt": item.updatedAt,
     }
 
 
@@ -406,27 +588,99 @@ async def security_headers_middleware(request: Request, call_next):
     return response
 
 
-def apply_runtime_schema_patches() -> None:
-    with engine.begin() as conn:
-        table_rows = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'")).fetchall()
-        tables = {row[0] for row in table_rows}
+def _quote_identifier(identifier: str) -> str:
+    return '"' + identifier.replace('"', '""') + '"'
 
-        def has_column(table_name: str, column_name: str) -> bool:
-            rows = conn.execute(text(f"PRAGMA table_info({table_name})")).fetchall()
-            return any(row[1] == column_name for row in rows)
 
-        for key, statements in FRONTEND_USER_TABLE_PATCHES.items():
-            if "." in key:
-                table_name, column_name = key.split(".", 1)
-                if table_name in tables and has_column(table_name, column_name):
-                    continue
-            else:
-                if key in tables:
-                    continue
+def _apply_legacy_schema_patches(conn, execute: bool) -> tuple[list[str], list[str]]:
+    table_rows = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'")).fetchall()
+    tables = {row[0] for row in table_rows}
+    executed_sql: list[str] = []
+    added_columns: list[str] = []
+
+    def has_column(table_name: str, column_name: str) -> bool:
+        rows = conn.execute(text(f"PRAGMA table_info({_quote_identifier(table_name)})")).fetchall()
+        return any(row[1] == column_name for row in rows)
+
+    for key, statements in FRONTEND_USER_TABLE_PATCHES.items():
+        needs_patch = False
+        if "." in key:
+            table_name, column_name = key.split(".", 1)
+            needs_patch = table_name not in tables or not has_column(table_name, column_name)
+            if needs_patch:
+                added_columns.append(key)
+        else:
+            needs_patch = key not in tables
+        if not needs_patch:
+            continue
+        if execute:
             for sql in statements:
                 conn.execute(text(sql))
+                executed_sql.append(sql)
             if "." not in key:
                 tables.add(key)
+    return executed_sql, added_columns
+
+
+def _build_missing_model_column_sql(conn, execute: bool) -> tuple[list[str], list[str], list[str]]:
+    inspector = inspect(conn)
+    existing_tables = set(inspector.get_table_names())
+    missing_tables: list[str] = []
+    added_columns: list[str] = []
+    executed_sql: list[str] = []
+
+    for table_name, table in Base.metadata.tables.items():
+        if table_name not in existing_tables:
+            missing_tables.append(table_name)
+            continue
+
+        existing_columns = {column["name"] for column in inspector.get_columns(table_name)}
+        for column in table.columns:
+            if column.name in existing_columns:
+                continue
+            if column.primary_key:
+                continue
+            sql = f"ALTER TABLE {_quote_identifier(table_name)} ADD COLUMN {CreateColumn(column).compile(dialect=engine.dialect)}"
+            added_columns.append(f"{table_name}.{column.name}")
+            if execute:
+                conn.execute(text(sql))
+                executed_sql.append(sql)
+
+    return missing_tables, added_columns, executed_sql
+
+
+def sync_database_schema(*, apply_changes: bool = True, seed_defaults: bool = False) -> dict[str, Any]:
+    missing_tables = sorted(set(Base.metadata.tables) - set(inspect(engine).get_table_names()))
+    executed_sql: list[str] = []
+    added_columns: list[str] = []
+
+    if apply_changes:
+        Base.metadata.create_all(bind=engine)
+
+    with engine.begin() as conn:
+        legacy_sql, legacy_columns = _apply_legacy_schema_patches(conn, execute=apply_changes)
+        model_missing_tables, model_columns, model_sql = _build_missing_model_column_sql(conn, execute=apply_changes)
+        executed_sql.extend(legacy_sql)
+        executed_sql.extend(model_sql)
+        added_columns.extend(legacy_columns)
+        added_columns.extend(model_columns)
+        if not apply_changes:
+            missing_tables = sorted(set(missing_tables) | set(model_missing_tables))
+
+    seeded = False
+    if apply_changes and seed_defaults:
+        with SessionLocal() as db:
+            seed_if_empty(db, SEED_FILE)
+        seeded = True
+
+    return {
+        "ok": True,
+        "applied": apply_changes,
+        "seeded": seeded,
+        "missingTables": missing_tables,
+        "addedColumns": added_columns,
+        "executedSql": executed_sql,
+    }
 
 
 def sanitize_frontend_register_input(payload: FrontendUserRegisterRequest) -> dict:
@@ -449,6 +703,95 @@ def sanitize_frontend_register_input(payload: FrontendUserRegisterRequest) -> di
     return {"username": username, "email": email, "password": password, "nickname": nickname}
 
 
+def sanitize_frontend_password_reset_input(payload: FrontendUserPasswordResetRequest) -> dict:
+    account = payload.account.strip().lower()
+    email = payload.email.strip().lower()
+    email_code = payload.emailCode.strip()
+    new_password = payload.newPassword.strip()
+
+    if not account:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="账号不能为空")
+    if not EMAIL_RE.match(email):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="邮箱格式不正确")
+    if not re.fullmatch(r"\d{6}", email_code):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="邮箱验证码为 6 位数字")
+    if len(new_password) < 6:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="新密码至少 6 位")
+
+    return {
+        "account": account,
+        "email": email,
+        "emailCode": email_code,
+        "newPassword": new_password,
+    }
+
+
+def sanitize_frontend_password_reset_code_input(payload: FrontendUserPasswordResetCodeRequest) -> dict:
+    account = payload.account.strip().lower()
+    email = payload.email.strip().lower()
+    if not account:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="账号不能为空")
+    if not EMAIL_RE.match(email):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="邮箱格式不正确")
+    return {
+        "account": account,
+        "email": email,
+    }
+
+
+def sanitize_frontend_profile_update_input(payload: FrontendUserProfileUpdate) -> dict:
+    nickname = payload.nickname.strip()
+    email = payload.email.strip().lower()
+    avatar = payload.avatar.strip()
+    bio = payload.bio.strip()
+    signature = payload.signature.strip()
+    if not nickname:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="昵称不能为空")
+    if len(nickname) > 50:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="昵称长度不能超过 50 个字符")
+    if not EMAIL_RE.match(email):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="邮箱格式不正确")
+    if len(avatar) > 255:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="头像地址过长")
+    if len(signature) > 120:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="签名长度不能超过 120 个字符")
+    if len(bio) > 500:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="个人简介长度不能超过 500 个字符")
+    return {
+        "nickname": nickname,
+        "email": email,
+        "avatar": avatar,
+        "bio": bio,
+        "signature": signature,
+    }
+
+
+def sanitize_frontend_password_change_input(payload: FrontendUserPasswordChangeRequest) -> dict:
+    current_password = payload.currentPassword.strip()
+    new_password = payload.newPassword.strip()
+    if not current_password:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="当前密码不能为空")
+    if len(new_password) < 6:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="新密码至少需要 6 位")
+    if len(new_password) > AUTH_INPUT_MAX_LENGTH:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="新密码长度不能超过 128 个字符")
+    return {"currentPassword": current_password, "newPassword": new_password}
+
+
+def sanitize_reading_history_input(payload: ReadingHistoryWrite) -> dict:
+    article_slug = payload.articleSlug.strip()
+    if not article_slug:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="文章标识不能为空")
+    return {
+        "articleSlug": article_slug[:150],
+        "articleTitle": payload.articleTitle.strip()[:200],
+        "articleSummary": payload.articleSummary.strip()[:1000],
+        "coverImage": payload.coverImage.strip()[:255],
+        "authorName": payload.authorName.strip()[:50],
+        "categoryName": payload.categoryName.strip()[:100],
+    }
+
+
 def validate_auth_text(value: str, field_name: str) -> str:
     normalized = value.strip()
     if not normalized:
@@ -456,6 +799,77 @@ def validate_auth_text(value: str, field_name: str) -> str:
     if len(normalized) > AUTH_INPUT_MAX_LENGTH:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"{field_name}长度不能超过 {AUTH_INPUT_MAX_LENGTH}")
     return normalized
+
+
+def hash_email_verification_code(email: str, purpose: str, code: str) -> str:
+    normalized = f"{email.strip().lower()}::{purpose.strip().lower()}::{code.strip()}"
+    return sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def generate_email_code() -> str:
+    return f"{randbelow(1000000):06d}"
+
+
+def send_password_reset_email(email: str, code: str) -> None:
+    app_name = get_mail_settings()["app_name"]
+    subject = f"{app_name} 密码重置验证码"
+    text = (
+        f"你好，\n\n"
+        f"你正在进行密码重置，本次验证码为：{code}\n"
+        f"验证码 {EMAIL_CODE_EXPIRES_SECONDS // 60} 分钟内有效，请勿泄露给他人。\n"
+        f"如果不是你本人操作，可以忽略这封邮件。\n"
+    )
+    html = (
+        "<div style=\"font-family:Arial,'PingFang SC','Microsoft YaHei',sans-serif;line-height:1.7;color:#1f2937;\">"
+        f"<p>你好，</p><p>你正在进行密码重置，本次验证码为：</p>"
+        f"<p style=\"font-size:28px;font-weight:700;letter-spacing:4px;color:#c2410c;\">{code}</p>"
+        f"<p>验证码 {EMAIL_CODE_EXPIRES_SECONDS // 60} 分钟内有效，请勿泄露给他人。</p>"
+        "<p>如果不是你本人操作，可以忽略这封邮件。</p></div>"
+    )
+    send_email(email, subject, text, html)
+
+
+def verify_email_code(db: Session, email: str, purpose: str, code: str) -> None:
+    now = current_time()
+    code_hash = hash_email_verification_code(email, purpose, code)
+    record = (
+        db.query(EmailVerificationCode)
+        .filter(
+            EmailVerificationCode.email == email,
+            EmailVerificationCode.purpose == purpose,
+            EmailVerificationCode.codeHash == code_hash,
+            EmailVerificationCode.usedAt.is_(None),
+        )
+        .order_by(EmailVerificationCode.id.desc())
+        .first()
+    )
+    if not record:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="邮箱验证码错误")
+    if record.expiresAt <= now:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="邮箱验证码已过期，请重新获取")
+    record.usedAt = now
+
+
+def create_email_code_record(db: Session, email: str, purpose: str, user_id: int | None = None) -> str:
+    now = current_time()
+    db.query(EmailVerificationCode).filter(
+        EmailVerificationCode.email == email,
+        EmailVerificationCode.purpose == purpose,
+        EmailVerificationCode.usedAt.is_(None),
+    ).update({"usedAt": now}, synchronize_session=False)
+
+    code = generate_email_code()
+    record = EmailVerificationCode(
+        userId=user_id,
+        email=email,
+        purpose=purpose,
+        codeHash=hash_email_verification_code(email, purpose, code),
+        expiresAt=datetime.fromtimestamp(now.timestamp() + EMAIL_CODE_EXPIRES_SECONDS),
+        usedAt=None,
+        createdAt=now,
+    )
+    db.add(record)
+    return code
 
 
 def resolve_frontend_user(session: dict | None, db: Session) -> FrontendUser | None:
@@ -640,6 +1054,272 @@ def sanitize_offer_input(payload: OfferWrite) -> dict:
     return data
 
 
+def build_article_write_from_ai_payload(payload: dict[str, Any], auto_publish: bool, db: Session) -> ArticleWrite:
+    data = dict(payload)
+    if not data.get("status") and auto_publish:
+        data["status"] = "published"
+    data.setdefault("authorName", "AI 助手")
+    data.setdefault("sourceType", "ai")
+
+    if not data.get("columnId"):
+        column_slug = str(data.pop("columnSlug", "")).strip()
+        column_name = str(data.pop("columnName", "")).strip()
+        query = db.query(ContentCategory)
+        if column_slug:
+            column = query.filter(ContentCategory.slug == column_slug).first()
+        elif column_name:
+            column = query.filter(ContentCategory.name == column_name).first()
+        else:
+            column = None
+        if not column:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="文章发布需要 columnId 或有效的 columnSlug/columnName")
+        data["columnId"] = column.id
+
+    if not data.get("tagIds"):
+        tag_ids: list[int] = []
+        for slug in data.pop("tagSlugs", []) or []:
+            text_slug = str(slug).strip()
+            if not text_slug:
+                continue
+            tag = db.query(ContentTag).filter(ContentTag.slug == text_slug).first()
+            if not tag:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"标签 slug 不存在: {text_slug}")
+            tag_ids.append(tag.id)
+        for name in data.pop("tagNames", []) or []:
+            text_name = str(name).strip()
+            if not text_name:
+                continue
+            tag = db.query(ContentTag).filter(ContentTag.name == text_name).first()
+            if not tag:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"标签名称不存在: {text_name}")
+            tag_ids.append(tag.id)
+        data["tagIds"] = list(dict.fromkeys(tag_ids))
+
+    return ArticleWrite(**data)
+
+
+def build_project_write_from_ai_payload(payload: dict[str, Any], auto_publish: bool) -> ProjectWrite:
+    data = dict(payload)
+    if not data.get("status") and auto_publish:
+        data["status"] = "published"
+    return ProjectWrite(**data)
+
+
+def build_offer_write_from_ai_payload(payload: dict[str, Any]) -> OfferWrite:
+    return OfferWrite(**dict(payload))
+
+
+def publish_ai_content(payload: AiContentPublishRequest, db: Session) -> dict[str, Any]:
+    content_type = payload.contentType.strip().lower()
+    mode = payload.mode.strip().lower() or "upsert"
+    if mode not in {"create", "update", "upsert"}:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="mode 仅支持 create / update / upsert")
+
+    raw = dict(payload.payload)
+    slug = str(raw.get("slug", "")).strip()
+    if not slug:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="payload.slug 不能为空")
+
+    if content_type == "article":
+        article_payload = build_article_write_from_ai_payload(raw, payload.autoPublish, db)
+        data = sanitize_article_input(article_payload, db)
+        item = (
+            db.query(Article)
+            .options(joinedload(Article.column), joinedload(Article.tags))
+            .filter(Article.slug == data["slug"])
+            .first()
+        )
+        if not item and mode == "update":
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="文章不存在，无法更新")
+        if item and mode == "create":
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="文章 slug 已存在")
+
+        action = "updated" if item else "created"
+        now = datetime.utcnow()
+        if not item:
+            item = Article(
+                title=data["title"],
+                slug=data["slug"],
+                summary=data["summary"],
+                contentBody=data["contentBody"],
+                authorName=data["authorName"],
+                columnId=data["columnId"],
+                coverImage=data["coverImage"],
+                heroTone=data["heroTone"],
+                status=data["status"],
+                sourceType=data["sourceType"],
+                publishedAt=now if data["status"] == "published" else None,
+                viewCount=0,
+                likeCount=0,
+                createdAt=now,
+                updatedAt=now,
+            )
+            item.column = data["column"]
+            item.tags = data["tags"]
+            db.add(item)
+        else:
+            item.title = data["title"]
+            item.slug = data["slug"]
+            item.summary = data["summary"]
+            item.contentBody = data["contentBody"]
+            item.authorName = data["authorName"]
+            item.columnId = data["columnId"]
+            item.coverImage = data["coverImage"]
+            item.heroTone = data["heroTone"]
+            item.status = data["status"]
+            item.sourceType = data["sourceType"]
+            if data["status"] == "published" and not item.publishedAt:
+                item.publishedAt = now
+            item.updatedAt = now
+            item.column = data["column"]
+            item.tags = data["tags"]
+
+        db.commit()
+        db.refresh(item)
+        return {
+            "ok": True,
+            "contentType": content_type,
+            "action": action,
+            "itemId": item.id,
+            "slug": item.slug,
+            "item": serialize_article(item),
+        }
+
+    if content_type == "project":
+        project_payload = build_project_write_from_ai_payload(raw, payload.autoPublish)
+        data = sanitize_project_input(project_payload)
+        item = db.query(Project).filter(Project.slug == data["slug"]).first()
+        if not item and mode == "update":
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="项目不存在，无法更新")
+        if item and mode == "create":
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="项目 slug 已存在")
+
+        action = "updated" if item else "created"
+        now = datetime.utcnow()
+        if not item:
+            item = Project(
+                slug=data["slug"],
+                name=data["name"],
+                projectType=data["projectType"],
+                title=data["title"] or None,
+                subtitle=data["subtitle"] or None,
+                shortDesc=data["shortDesc"] or None,
+                summary=data["summary"] or None,
+                description=data["description"] or None,
+                coverImage=data["coverImage"],
+                bannerImage=data["bannerImage"],
+                status=data["status"],
+                stage=data["stage"] or None,
+                supportStatus=data["supportStatus"] or None,
+                price=data["price"] or None,
+                originalPrice=data["originalPrice"] or None,
+                tagsJson=json.dumps(data["tags"], ensure_ascii=False),
+                featuresJson=json.dumps(data["features"], ensure_ascii=False),
+                highlightsJson=json.dumps(data["highlights"], ensure_ascii=False),
+                faqJson=json.dumps(data["faq"], ensure_ascii=False),
+                testimonialsJson=json.dumps(data["testimonials"], ensure_ascii=False),
+                extraJson=json.dumps(data["extra"], ensure_ascii=False),
+                createdAt=now,
+                updatedAt=now,
+            )
+            db.add(item)
+        else:
+            item.slug = data["slug"]
+            item.name = data["name"]
+            item.projectType = data["projectType"]
+            item.title = data["title"] or None
+            item.subtitle = data["subtitle"] or None
+            item.shortDesc = data["shortDesc"] or None
+            item.summary = data["summary"] or None
+            item.description = data["description"] or None
+            item.coverImage = data["coverImage"]
+            item.bannerImage = data["bannerImage"]
+            item.status = data["status"]
+            item.stage = data["stage"] or None
+            item.supportStatus = data["supportStatus"] or None
+            item.price = data["price"] or None
+            item.originalPrice = data["originalPrice"] or None
+            item.tagsJson = json.dumps(data["tags"], ensure_ascii=False)
+            item.featuresJson = json.dumps(data["features"], ensure_ascii=False)
+            item.highlightsJson = json.dumps(data["highlights"], ensure_ascii=False)
+            item.faqJson = json.dumps(data["faq"], ensure_ascii=False)
+            item.testimonialsJson = json.dumps(data["testimonials"], ensure_ascii=False)
+            item.extraJson = json.dumps(data["extra"], ensure_ascii=False)
+            item.updatedAt = now
+
+        db.commit()
+        db.refresh(item)
+        return {
+            "ok": True,
+            "contentType": content_type,
+            "action": action,
+            "itemId": item.id,
+            "slug": item.slug,
+            "item": serialize_project(item),
+        }
+
+    if content_type == "offer":
+        offer_payload = build_offer_write_from_ai_payload(raw)
+        data = sanitize_offer_input(offer_payload)
+        item = db.query(Offer).filter(Offer.slug == data["slug"]).first()
+        if not item and mode == "update":
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="优惠内容不存在，无法更新")
+        if item and mode == "create":
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="优惠内容 slug 已存在")
+
+        action = "updated" if item else "created"
+        now = datetime.utcnow()
+        if not item:
+            item = Offer(
+                slug=data["slug"],
+                title=data["title"],
+                subtitle=data["subtitle"],
+                category=data["category"] or None,
+                status=data["status"] or None,
+                statusTone=data["statusTone"] or None,
+                price=data["price"],
+                originalPrice=data["originalPrice"] or None,
+                bannerImage=data["bannerImage"],
+                summary=data["summary"] or None,
+                ctaLabel=data["ctaLabel"] or None,
+                benefitsJson=json.dumps(data["benefits"], ensure_ascii=False),
+                metaJson=json.dumps(data["meta"], ensure_ascii=False),
+                extraJson=json.dumps(data["extra"], ensure_ascii=False),
+                createdAt=now,
+                updatedAt=now,
+            )
+            db.add(item)
+        else:
+            item.slug = data["slug"]
+            item.title = data["title"]
+            item.subtitle = data["subtitle"]
+            item.category = data["category"] or None
+            item.status = data["status"] or None
+            item.statusTone = data["statusTone"] or None
+            item.price = data["price"]
+            item.originalPrice = data["originalPrice"] or None
+            item.bannerImage = data["bannerImage"]
+            item.summary = data["summary"] or None
+            item.ctaLabel = data["ctaLabel"] or None
+            item.benefitsJson = json.dumps(data["benefits"], ensure_ascii=False)
+            item.metaJson = json.dumps(data["meta"], ensure_ascii=False)
+            item.extraJson = json.dumps(data["extra"], ensure_ascii=False)
+            item.updatedAt = now
+
+        db.commit()
+        db.refresh(item)
+        return {
+            "ok": True,
+            "contentType": content_type,
+            "action": action,
+            "itemId": item.id,
+            "slug": item.slug,
+            "item": serialize_offer(item),
+        }
+
+    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="contentType 仅支持 article / project / offer")
+
+
 def sanitize_ad_item_input(payload: AdItemWrite) -> dict:
     data = payload.model_dump()
     data["slotKey"] = data["slotKey"].strip()
@@ -706,10 +1386,7 @@ def sanitize_beta_application_input(payload: BetaApplicationWrite) -> dict:
 
 @app.on_event("startup")
 def startup() -> None:
-    Base.metadata.create_all(bind=engine)
-    apply_runtime_schema_patches()
-    with SessionLocal() as db:
-        seed_if_empty(db, SEED_FILE)
+    sync_database_schema(apply_changes=True, seed_defaults=True)
 
 if ADMIN_DIST_STATIC.exists():
     app.mount("/admin/static", StaticFiles(directory=ADMIN_DIST_STATIC), name="admin-static")
@@ -846,12 +1523,251 @@ async def frontend_user_login(
     return FrontendAuthResponse.model_validate(result)
 
 
+@app.post("/api/users/reset-password/code", response_model=EmailVerificationSendResponse)
+async def send_frontend_user_password_reset_code(
+    payload: FrontendUserPasswordResetCodeRequest, request: Request, db: Session = Depends(get_db)
+) -> EmailVerificationSendResponse:
+    ip = get_request_ip(request)
+    scope = "frontend"
+    data = sanitize_frontend_password_reset_code_input(payload)
+    account = data["account"]
+
+    await apply_login_delay(scope, ip, account)
+    verify_captcha(scope, payload.captchaKey, payload.captchaCode)
+
+    user = (
+        db.query(FrontendUser)
+        .filter(
+            ((FrontendUser.username == account) | (FrontendUser.email == account)),
+            FrontendUser.email == data["email"],
+            FrontendUser.status == "active",
+        )
+        .first()
+    )
+    if not user:
+        detail = build_auth_error_payload("账号与邮箱不匹配", scope, ip, account)
+        await asyncio.sleep(detail["retryDelaySeconds"])
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail)
+
+    code = create_email_code_record(db, user.email, EMAIL_CODE_PURPOSE_RESET_PASSWORD, user.id)
+    send_password_reset_email(user.email, code)
+    db.commit()
+    clear_login_failures(scope, ip, account)
+    return EmailVerificationSendResponse(
+        ok=True,
+        message="邮箱验证码已发送，请查收邮件",
+        expiresIn=EMAIL_CODE_EXPIRES_SECONDS,
+    )
+
+
+@app.post("/api/users/reset-password")
+async def reset_frontend_user_password(
+    payload: FrontendUserPasswordResetRequest, request: Request, db: Session = Depends(get_db)
+) -> dict:
+    ip = get_request_ip(request)
+    scope = "frontend"
+    data = sanitize_frontend_password_reset_input(payload)
+    account = data["account"]
+
+    await apply_login_delay(scope, ip, account)
+
+    user = (
+        db.query(FrontendUser)
+        .filter(
+            ((FrontendUser.username == account) | (FrontendUser.email == account)),
+            FrontendUser.email == data["email"],
+            FrontendUser.status == "active",
+        )
+        .first()
+    )
+    if not user:
+        detail = build_auth_error_payload("账号与邮箱不匹配", scope, ip, account)
+        await asyncio.sleep(detail["retryDelaySeconds"])
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail)
+
+    verify_email_code(db, user.email, EMAIL_CODE_PURPOSE_RESET_PASSWORD, data["emailCode"])
+    user.passwordHash = hash_password(data["newPassword"])
+    user.updatedAt = current_time()
+    db.commit()
+    clear_login_failures(scope, ip, account)
+    return {"ok": True, "message": "密码已重置，请使用新密码登录"}
+
+
+@app.post("/api/admin/notifications/email")
+def send_admin_email_notification(
+    payload: AdminEmailNotificationRequest,
+    _: dict = Depends(require_auth),
+) -> dict:
+    to_email = payload.toEmail.strip().lower()
+    subject = payload.subject.strip()
+    text = payload.text.strip()
+    html = payload.html.strip()
+    if not EMAIL_RE.match(to_email):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="收件邮箱格式不正确")
+    if not subject:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="邮件主题不能为空")
+    if not text and not html:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="邮件内容不能为空")
+    send_email(to_email, subject, text or subject, html)
+    return {"ok": True, "message": "邮件发送成功"}
+
+
 @app.get("/api/users/me", response_model=FrontendUserProfileOut)
 def frontend_user_me(session: dict = Depends(require_frontend_auth), db: Session = Depends(get_db)) -> FrontendUserProfileOut:
     user = db.query(FrontendUser).filter(FrontendUser.id == session["id"]).first()
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="用户不存在")
     return FrontendUserProfileOut.model_validate(serialize_frontend_user(user))
+
+
+@app.put("/api/users/me", response_model=FrontendUserProfileOut)
+def frontend_user_update_profile(
+    payload: FrontendUserProfileUpdate,
+    session: dict = Depends(require_frontend_auth),
+    db: Session = Depends(get_db),
+) -> FrontendUserProfileOut:
+    user = db.query(FrontendUser).filter(FrontendUser.id == session["id"]).first()
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="用户不存在")
+    data = sanitize_frontend_profile_update_input(payload)
+    duplicate = db.query(FrontendUser).filter(FrontendUser.email == data["email"], FrontendUser.id != user.id).first()
+    if duplicate:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="邮箱已存在")
+    user.nickname = data["nickname"]
+    user.email = data["email"]
+    user.avatar = data["avatar"]
+    user.bio = data["bio"] or None
+    user.signature = data["signature"]
+    user.updatedAt = current_time()
+    db.commit()
+    db.refresh(user)
+    return FrontendUserProfileOut.model_validate(serialize_frontend_user(user))
+
+
+@app.post("/api/users/me/password")
+def frontend_user_change_password(
+    payload: FrontendUserPasswordChangeRequest,
+    session: dict = Depends(require_frontend_auth),
+    db: Session = Depends(get_db),
+) -> dict:
+    user = db.query(FrontendUser).filter(FrontendUser.id == session["id"]).first()
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="用户不存在")
+    data = sanitize_frontend_password_change_input(payload)
+    if user.passwordHash != hash_password(data["currentPassword"]):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="当前密码不正确")
+    user.passwordHash = hash_password(data["newPassword"])
+    user.updatedAt = current_time()
+    db.commit()
+    return {"ok": True, "message": "密码修改成功"}
+
+
+@app.get("/api/users/me/summary", response_model=FrontendProfileSummary)
+def frontend_user_profile_summary(
+    session: dict = Depends(require_frontend_auth),
+    db: Session = Depends(get_db),
+) -> FrontendProfileSummary:
+    user = db.query(FrontendUser).filter(FrontendUser.id == session["id"]).first()
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="用户不存在")
+
+    wishlist_items = (
+        db.query(WishlistItem)
+        .filter(WishlistItem.userId == user.id)
+        .order_by(WishlistItem.updatedAt.desc(), WishlistItem.id.desc())
+        .all()
+    )
+    reading_items = (
+        db.query(ReadingHistory)
+        .filter(ReadingHistory.userId == user.id)
+        .order_by(ReadingHistory.viewedAt.desc(), ReadingHistory.id.desc())
+        .limit(30)
+        .all()
+    )
+    like_count = db.query(ArticleInteraction).filter(
+        ArticleInteraction.userId == user.id,
+        ArticleInteraction.interactionType == "like",
+        ArticleInteraction.isCanceled == False,
+    ).count()
+    favorite_count = db.query(ArticleInteraction).filter(
+        ArticleInteraction.userId == user.id,
+        ArticleInteraction.interactionType == "favorite",
+        ArticleInteraction.isCanceled == False,
+    ).count()
+    comment_count = db.query(ArticleComment).filter(ArticleComment.userId == user.id).count()
+    beta_count = db.query(BetaApplication).filter(BetaApplication.userId == user.id).count()
+    community_count = db.query(CommunityLead).filter(CommunityLead.userId == user.id).count()
+
+    return FrontendProfileSummary.model_validate({
+        "profile": serialize_frontend_user(user),
+        "stats": {
+            "wishlistCount": len(wishlist_items),
+            "readingHistoryCount": len(reading_items),
+            "likeCount": like_count,
+            "favoriteCount": favorite_count,
+            "commentCount": comment_count,
+            "betaApplicationCount": beta_count,
+            "communityLeadCount": community_count,
+        },
+        "wishlist": [serialize_wishlist_item(item) for item in wishlist_items],
+        "readingHistory": [serialize_reading_history(item) for item in reading_items],
+    })
+
+
+@app.post("/api/users/me/reading-history", response_model=ReadingHistoryOut, status_code=status.HTTP_201_CREATED)
+def create_frontend_reading_history(
+    payload: ReadingHistoryWrite,
+    session: dict = Depends(require_frontend_auth),
+    db: Session = Depends(get_db),
+) -> ReadingHistoryOut:
+    user = db.query(FrontendUser).filter(FrontendUser.id == session["id"]).first()
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="用户不存在")
+    data = sanitize_reading_history_input(payload)
+    now = current_time()
+    item = (
+        db.query(ReadingHistory)
+        .filter(ReadingHistory.userId == user.id, ReadingHistory.articleSlug == data["articleSlug"])
+        .first()
+    )
+    if item:
+        item.articleTitle = data["articleTitle"] or item.articleTitle
+        item.articleSummary = data["articleSummary"] or item.articleSummary
+        item.coverImage = data["coverImage"] or item.coverImage
+        item.authorName = data["authorName"] or item.authorName
+        item.categoryName = data["categoryName"] or item.categoryName
+        item.viewedAt = now
+        item.updatedAt = now
+    else:
+        item = ReadingHistory(
+            userId=user.id,
+            articleSlug=data["articleSlug"],
+            articleTitle=data["articleTitle"],
+            articleSummary=data["articleSummary"] or None,
+            coverImage=data["coverImage"],
+            authorName=data["authorName"],
+            categoryName=data["categoryName"],
+            viewedAt=now,
+            createdAt=now,
+            updatedAt=now,
+        )
+        db.add(item)
+    db.commit()
+    db.refresh(item)
+    return ReadingHistoryOut.model_validate(serialize_reading_history(item))
+
+
+@app.delete("/api/users/me/reading-history", response_model=DeleteResponse)
+def clear_frontend_reading_history(
+    session: dict = Depends(require_frontend_auth),
+    db: Session = Depends(get_db),
+) -> DeleteResponse:
+    user = db.query(FrontendUser).filter(FrontendUser.id == session["id"]).first()
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="用户不存在")
+    deleted = db.query(ReadingHistory).filter(ReadingHistory.userId == user.id).delete()
+    db.commit()
+    return DeleteResponse.model_validate({"ok": True, "deletedId": deleted})
 
 
 @app.get("/api/columns")
@@ -1117,6 +2033,37 @@ def list_offers(db: Session = Depends(get_db)) -> dict:
     return {"items": items, "total": len(items)}
 
 
+@app.get("/api/search", response_model=SearchResponse)
+def search_site(
+    q: str = Query(default=""),
+    typeValue: str = Query(default="", alias="type"),
+    db: Session = Depends(get_db),
+) -> SearchResponse:
+    keyword = q.strip().lower()
+    normalized_type = typeValue.strip()
+    items = build_search_result_items(db, keyword)
+    counts = {
+        "全部": len(items),
+        "文章": len([item for item in items if item["type"] == "文章"]),
+        "产品": len([item for item in items if item["type"] == "产品"]),
+        "游戏": len([item for item in items if item["type"] == "游戏"]),
+        "实验室": len([item for item in items if item["type"] == "实验室"]),
+        "快来尝鲜": len([item for item in items if item["type"] == "快来尝鲜"]),
+    }
+
+    if normalized_type and normalized_type != "全部":
+        items = [item for item in items if item["type"] == normalized_type]
+
+    return SearchResponse.model_validate(
+        {
+            "query": q.strip(),
+            "items": items,
+            "total": len(items),
+            "counts": counts,
+        }
+    )
+
+
 @app.get("/api/offers/{slug}", response_model=OfferOut)
 def get_offer(slug: str, db: Session = Depends(get_db)) -> OfferOut:
     item = db.query(Offer).filter(Offer.slug == slug).first()
@@ -1308,6 +2255,25 @@ def create_beta_application(payload: BetaApplicationWrite, db: Session = Depends
     db.commit()
     db.refresh(item)
     return BetaApplicationOut.model_validate(serialize_beta_application(item))
+
+
+@app.post("/api/admin/database/sync", response_model=DatabaseSyncResponse)
+def admin_sync_database(
+    payload: DatabaseSyncRequest,
+    _: dict = Depends(require_auth),
+) -> DatabaseSyncResponse:
+    result = sync_database_schema(apply_changes=payload.apply, seed_defaults=payload.seedDefaults)
+    return DatabaseSyncResponse.model_validate(result)
+
+
+@app.post("/api/admin/content/publish", response_model=AiContentPublishResponse)
+def admin_publish_content(
+    payload: AiContentPublishRequest,
+    _: dict = Depends(require_auth),
+    db: Session = Depends(get_db),
+) -> AiContentPublishResponse:
+    result = publish_ai_content(payload, db)
+    return AiContentPublishResponse.model_validate(result)
 
 
 @app.get("/api/admin/articles")

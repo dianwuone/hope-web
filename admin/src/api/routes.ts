@@ -11,13 +11,21 @@ export const getAsyncRoutes = () => {
         path: "/content",
         name: "Content",
         component: "content/index",
-        redirect: "/content/articles",
+        redirect: "/content/publish",
         meta: {
           icon: "ep:Document",
           title: "内容管理",
           rank: 1
         },
         children: [
+          {
+            path: "/content/publish",
+            name: "AdminContentPublish",
+            component: "content/publish/index",
+            meta: {
+              title: "同步与 AI 发布"
+            }
+          },
           {
             path: "/content/articles",
             name: "AdminArticles",

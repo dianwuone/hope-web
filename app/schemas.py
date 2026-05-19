@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -32,6 +33,7 @@ class FrontendUserProfileOut(ApiModel):
     nickname: str
     avatar: str = ""
     bio: str | None = None
+    signature: str = ""
     status: str
     lastLoginAt: datetime | None = None
     createdAt: datetime
@@ -43,6 +45,33 @@ class FrontendUserLoginRequest(BaseModel):
     password: str
     captchaKey: str = ""
     captchaCode: str = ""
+
+
+class FrontendUserPasswordResetRequest(BaseModel):
+    account: str
+    email: str
+    emailCode: str
+    newPassword: str
+
+
+class FrontendUserPasswordResetCodeRequest(BaseModel):
+    account: str
+    email: str
+    captchaKey: str = ""
+    captchaCode: str = ""
+
+
+class EmailVerificationSendResponse(ApiModel):
+    ok: bool
+    message: str
+    expiresIn: int
+
+
+class AdminEmailNotificationRequest(BaseModel):
+    toEmail: str
+    subject: str
+    text: str
+    html: str = ""
 
 
 class FrontendAuthResponse(ApiModel):
@@ -176,6 +205,36 @@ class HealthResponse(ApiModel):
     time: datetime
 
 
+class DatabaseSyncRequest(BaseModel):
+    apply: bool = True
+    seedDefaults: bool = True
+
+
+class DatabaseSyncResponse(ApiModel):
+    ok: bool
+    applied: bool
+    seeded: bool
+    missingTables: list[str] = Field(default_factory=list)
+    addedColumns: list[str] = Field(default_factory=list)
+    executedSql: list[str] = Field(default_factory=list)
+
+
+class AiContentPublishRequest(BaseModel):
+    contentType: str
+    mode: str = "upsert"
+    autoPublish: bool = True
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+
+class AiContentPublishResponse(ApiModel):
+    ok: bool
+    contentType: str
+    action: str
+    itemId: int
+    slug: str
+    item: dict[str, Any] = Field(default_factory=dict)
+
+
 class CaptchaResponse(ApiModel):
     captchaKey: str
     captchaSvg: str
@@ -302,6 +361,24 @@ class OfferOut(ApiModel):
     extra: dict = Field(default_factory=dict)
     createdAt: datetime
     updatedAt: datetime
+
+
+class SearchResultItem(ApiModel):
+    type: str
+    title: str
+    summary: str = ""
+    slug: str
+    to: str
+    image: str = ""
+    source: str = ""
+    publishedAt: datetime | None = None
+
+
+class SearchResponse(ApiModel):
+    query: str
+    items: list[SearchResultItem] = Field(default_factory=list)
+    total: int
+    counts: dict = Field(default_factory=dict)
 
 
 class AdItemWrite(BaseModel):
@@ -471,4 +548,48 @@ class FrontendUserUpdate(BaseModel):
     email: str = ""
     avatar: str = ""
     bio: str = ""
+    signature: str = ""
     status: str = "active"
+
+
+class FrontendUserProfileUpdate(BaseModel):
+    nickname: str = ""
+    email: str = ""
+    avatar: str = ""
+    bio: str = ""
+    signature: str = ""
+
+
+class FrontendUserPasswordChangeRequest(BaseModel):
+    currentPassword: str
+    newPassword: str
+
+
+class ReadingHistoryWrite(BaseModel):
+    articleSlug: str
+    articleTitle: str = ""
+    articleSummary: str = ""
+    coverImage: str = ""
+    authorName: str = ""
+    categoryName: str = ""
+
+
+class ReadingHistoryOut(ApiModel):
+    id: int
+    userId: int
+    articleSlug: str
+    articleTitle: str
+    articleSummary: str | None = None
+    coverImage: str = ""
+    authorName: str = ""
+    categoryName: str = ""
+    viewedAt: datetime
+    createdAt: datetime
+    updatedAt: datetime
+
+
+class FrontendProfileSummary(ApiModel):
+    profile: FrontendUserProfileOut
+    stats: dict
+    wishlist: list[WishlistOut] = Field(default_factory=list)
+    readingHistory: list[ReadingHistoryOut] = Field(default_factory=list)

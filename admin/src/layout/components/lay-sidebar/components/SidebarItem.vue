@@ -128,7 +128,11 @@ function resolvePath(routePath) {
   >
     <el-menu-item
       :index="resolvePath(onlyOneChild.path)"
-      :class="{ 'submenu-title-noDropdown': !isNest }"
+      :class="[
+        'sidebar-menu-item',
+        isNest ? 'sidebar-menu-item--nested' : 'sidebar-menu-item--root',
+        { 'submenu-title-noDropdown': !isNest }
+      ]"
       :style="getNoDropdownStyle"
       v-bind="attrs"
     >
@@ -184,6 +188,10 @@ function resolvePath(routePath) {
     ref="subMenu"
     teleported
     :index="resolvePath(item.path)"
+    :class="[
+      'sidebar-sub-menu',
+      isNest ? 'sidebar-sub-menu--nested' : 'sidebar-sub-menu--root'
+    ]"
     v-bind="expandCloseIcon"
   >
     <template #title>

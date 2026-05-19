@@ -171,6 +171,24 @@ export interface FrontendUserItem {
   communityLeadCount: number;
 }
 
+export interface DatabaseSyncResult {
+  ok: boolean;
+  applied: boolean;
+  seeded: boolean;
+  missingTables: string[];
+  addedColumns: string[];
+  executedSql: string[];
+}
+
+export interface AiPublishResult {
+  ok: boolean;
+  contentType: string;
+  action: string;
+  itemId: number;
+  slug: string;
+  item: Record<string, any>;
+}
+
 export const fetchColumns = () => http.get<ListResult<any>, any>("/api/columns");
 export const fetchTags = () => http.get<ListResult<any>, any>("/api/tags");
 export const fetchArticles = () => http.get<ListResult<ArticleItem>, any>("/api/admin/articles");
@@ -215,3 +233,13 @@ export const updateCommunityLead = (id: number, data: any) => http.request<Commu
 
 export const fetchBetaApplications = () => http.get<ListResult<BetaApplicationItem>, any>("/api/admin/beta-applications");
 export const updateBetaApplication = (id: number, data: any) => http.request<BetaApplicationItem>("put", `/api/admin/beta-applications/${id}`, { data });
+
+export const syncDatabase = (data: { apply: boolean; seedDefaults: boolean }) =>
+  http.post<DatabaseSyncResult, any>("/api/admin/database/sync", { data });
+
+export const publishAiContent = (data: {
+  contentType: string;
+  mode: string;
+  autoPublish: boolean;
+  payload: Record<string, any>;
+}) => http.post<AiPublishResult, any>("/api/admin/content/publish", { data });

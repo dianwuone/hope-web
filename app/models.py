@@ -35,6 +35,7 @@ class FrontendUser(Base):
     nickname = Column(String(50), nullable=False)
     avatar = Column(String(255), nullable=False, default="")
     bio = Column(Text, nullable=True)
+    signature = Column(Text, nullable=False, default="")
     status = Column(String(20), nullable=False, default="active")
     lastLoginAt = Column(DateTime(timezone=False), nullable=True)
     createdAt = Column(DateTime(timezone=False), nullable=False)
@@ -45,6 +46,23 @@ class FrontendUser(Base):
     articleComments = relationship("ArticleComment", back_populates="user")
     communityLeads = relationship("CommunityLead", back_populates="user")
     betaApplications = relationship("BetaApplication", back_populates="user")
+    emailVerificationCodes = relationship("EmailVerificationCode", back_populates="user")
+    readingHistories = relationship("ReadingHistory", back_populates="user")
+
+
+class EmailVerificationCode(Base):
+    __tablename__ = "email_verification_codes"
+
+    id = Column(Integer, primary_key=True, index=True)
+    userId = Column(Integer, ForeignKey("frontend_users.id"), nullable=True, index=True)
+    email = Column(String(100), nullable=False, index=True)
+    purpose = Column(String(50), nullable=False, index=True)
+    codeHash = Column(String(255), nullable=False)
+    expiresAt = Column(DateTime(timezone=False), nullable=False, index=True)
+    usedAt = Column(DateTime(timezone=False), nullable=True)
+    createdAt = Column(DateTime(timezone=False), nullable=False)
+
+    user = relationship("FrontendUser", back_populates="emailVerificationCodes")
 
 
 class ContentCategory(Base):
@@ -258,6 +276,24 @@ class ArticleComment(Base):
 
     article = relationship("Article", back_populates="comments")
     user = relationship("FrontendUser", back_populates="articleComments")
+
+
+class ReadingHistory(Base):
+    __tablename__ = "reading_histories"
+
+    id = Column(Integer, primary_key=True, index=True)
+    userId = Column(Integer, ForeignKey("frontend_users.id"), nullable=False, index=True)
+    articleSlug = Column(String(150), nullable=False, index=True)
+    articleTitle = Column(String(200), nullable=False, default="")
+    articleSummary = Column(Text, nullable=True)
+    coverImage = Column(String(255), nullable=False, default="")
+    authorName = Column(String(50), nullable=False, default="")
+    categoryName = Column(String(100), nullable=False, default="")
+    viewedAt = Column(DateTime(timezone=False), nullable=False, index=True)
+    createdAt = Column(DateTime(timezone=False), nullable=False)
+    updatedAt = Column(DateTime(timezone=False), nullable=False)
+
+    user = relationship("FrontendUser", back_populates="readingHistories")
 
 
 class Article(Base):

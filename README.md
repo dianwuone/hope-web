@@ -92,6 +92,8 @@ cd backend
 9. `GET /api/offers`
 10. `GET /api/offers/:slug`
 11. `GET /api/bootstrap`
+12. `POST /api/users/reset-password/code`
+13. `POST /api/users/reset-password`
 
 `GET /api/articles` 支持：
 
@@ -124,8 +126,35 @@ cd backend
 19. `POST /api/admin/offers`
 20. `PUT /api/admin/offers/:id`
 21. `DELETE /api/admin/offers/:id`
+22. `POST /api/admin/notifications/email`
 
 除登录外，后台接口都需要 `Authorization: Bearer <token>`。
+
+## 邮箱能力配置
+
+如果你要启用“邮箱验证码重置密码”或后台手动发送通知邮件，需要先配置 SMTP 环境变量：
+
+```bash
+$env:SMTP_HOST='smtp.qq.com'
+$env:SMTP_PORT='465'
+$env:SMTP_FROM_EMAIL='your@email.com'
+$env:SMTP_FROM_NAME='Quentin Window'
+$env:SMTP_USERNAME='your@email.com'
+$env:SMTP_PASSWORD='你的SMTP授权码'
+$env:SMTP_USE_SSL='true'
+$env:SMTP_USE_TLS='false'
+```
+
+可选项：
+
+1. `APP_NAME`：邮件标题里的站点名称，默认 `Quentin Window`
+2. `SMTP_TIMEOUT_SECONDS`：发送超时秒数，默认 `15`
+
+说明：
+
+1. 忘记密码流程现在改为“图形验证码 + 邮箱验证码 + 新密码”
+2. 邮箱验证码默认 10 分钟有效
+3. 后台可以调用 `POST /api/admin/notifications/email` 发送普通通知邮件，适合报名结果通知、活动提醒、临时消息推送
 
 ## 数据说明
 
