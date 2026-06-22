@@ -180,6 +180,20 @@ export interface DatabaseSyncResult {
   executedSql: string[];
 }
 
+export interface DatabaseUploadResult {
+  ok: boolean;
+  databasePath: string;
+  backupPath: string;
+  backupWalPath?: string;
+  backupShmPath?: string;
+  uploadedAt: string;
+  appliedSync: boolean;
+  seeded: boolean;
+  missingTables: string[];
+  addedColumns: string[];
+  executedSql: string[];
+}
+
 export interface AiPublishResult {
   ok: boolean;
   contentType: string;
@@ -236,6 +250,17 @@ export const updateBetaApplication = (id: number, data: any) => http.request<Bet
 
 export const syncDatabase = (data: { apply: boolean; seedDefaults: boolean }) =>
   http.post<DatabaseSyncResult, any>("/api/admin/database/sync", { data });
+
+export const uploadDatabaseFile = (file: File) => {
+  const formData = new FormData();
+  formData.append("file", file);
+  return http.request<DatabaseUploadResult>("post", "/api/admin/database/upload", {
+    data: formData,
+    headers: {
+      "Content-Type": "multipart/form-data"
+    }
+  });
+};
 
 export const publishAiContent = (data: {
   contentType: string;

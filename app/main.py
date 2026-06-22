@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import asyncio
 import json
+import shutil
+import sqlite3
 from datetime import datetime
 from hashlib import sha256
+from pathlib import Path
 import re
 from secrets import randbelow
 from typing import Any
 
-from fastapi import Depends, FastAPI, HTTPException, Query, Request, status
+from fastapi import Depends, FastAPI, File, HTTPException, Query, Request, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, RedirectResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -18,7 +21,7 @@ from sqlalchemy.schema import CreateColumn
 
 from .auth import login as do_login
 from .auth import get_frontend_session, hash_password, login_frontend, require_auth, require_frontend_auth
-from .database import BASE_DIR, Base, SessionLocal, engine, get_db
+from .database import BASE_DIR, Base, SQLITE_DB_PATH, SessionLocal, dispose_engine, engine, get_db
 from .models import (
     AdItem,
     Article,
@@ -59,6 +62,7 @@ from .schemas import (
     CommunityLeadUpdate,
     CommunityLeadWrite,
     DashboardResponse,
+    DatabaseReplaceResponse,
     DatabaseSyncRequest,
     DatabaseSyncResponse,
     DeleteResponse,
@@ -121,6 +125,10 @@ ADMIN_DIST_PLATFORM_CONFIG = ADMIN_DIST_DIR / "platform-config.json"
 ADMIN_DIST_FAVICON = ADMIN_DIST_DIR / "favicon.ico"
 ADMIN_DIST_LOGO = ADMIN_DIST_DIR / "logo.svg"
 SEED_FILE = BASE_DIR / "data" / "content.json"
+DB_UPLOAD_TMP_DIR = BASE_DIR / "data" / "uploads"
+DB_BACKUP_DIR = BASE_DIR / "data" / "backups"
+DB_UPLOAD_TMP_DIR.mkdir(parents=True, exist_ok=True)
+DB_BACKUP_DIR.mkdir(parents=True, exist_ok=True)
 AUTH_INPUT_MAX_LENGTH = 128
 
 FRONTEND_USER_TABLE_PATCHES = {
@@ -680,6 +688,73 @@ def sync_database_schema(*, apply_changes: bool = True, seed_defaults: bool = Fa
         "missingTables": missing_tables,
         "addedColumns": added_columns,
         "executedSql": executed_sql,
+    }
+
+
+def _ensure_sqlite_file(db_path: Path) -> None:
+    if not db_path.exists() or db_path.stat().st_size == 0:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="上传文件为空或不存在")
+
+    try:
+        with sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True) as conn:
+            conn.execute("PRAGMA schema_version").fetchone()
+            tables = conn.execute("SELECT name FROM sqlite_master WHERE type='table' LIMIT 1").fetchall()
+            if not tables:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="上传的 SQLite 数据库中没有任何数据表")
+    except HTTPException:
+        raise
+    except Exception as err:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"上传文件不是有效的 SQLite 数据库：{err}") from err
+
+
+def _copy_if_exists(src: Path, dest: Path) -> str | None:
+    if not src.exists():
+        return None
+    shutil.copy2(src, dest)
+    return str(dest)
+
+
+def replace_database_file(upload_path: Path) -> dict[str, Any]:
+    _ensure_sqlite_file(upload_path)
+
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    target_db_path = SQLITE_DB_PATH.resolve()
+    target_dir = target_db_path.parent
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    backup_path = DB_BACKUP_DIR / f"{target_db_path.stem}-{timestamp}.db"
+    backup_wal_path = DB_BACKUP_DIR / f"{target_db_path.stem}-{timestamp}.db-wal"
+    backup_shm_path = DB_BACKUP_DIR / f"{target_db_path.stem}-{timestamp}.db-shm"
+
+    dispose_engine()
+
+    copied_backup = _copy_if_exists(target_db_path, backup_path)
+    copied_backup_wal = _copy_if_exists(target_db_path.with_name(f"{target_db_path.name}-wal"), backup_wal_path)
+    copied_backup_shm = _copy_if_exists(target_db_path.with_name(f"{target_db_path.name}-shm"), backup_shm_path)
+
+    shutil.copy2(upload_path, target_db_path)
+
+    wal_file = target_db_path.with_name(f"{target_db_path.name}-wal")
+    shm_file = target_db_path.with_name(f"{target_db_path.name}-shm")
+    if wal_file.exists():
+        wal_file.unlink()
+    if shm_file.exists():
+        shm_file.unlink()
+
+    sync_result = sync_database_schema(apply_changes=True, seed_defaults=False)
+
+    return {
+        "ok": True,
+        "databasePath": str(target_db_path),
+        "backupPath": copied_backup or "",
+        "backupWalPath": copied_backup_wal,
+        "backupShmPath": copied_backup_shm,
+        "uploadedAt": datetime.now(),
+        "appliedSync": sync_result["applied"],
+        "seeded": sync_result["seeded"],
+        "missingTables": sync_result["missingTables"],
+        "addedColumns": sync_result["addedColumns"],
+        "executedSql": sync_result["executedSql"],
     }
 
 
@@ -2264,6 +2339,34 @@ def admin_sync_database(
 ) -> DatabaseSyncResponse:
     result = sync_database_schema(apply_changes=payload.apply, seed_defaults=payload.seedDefaults)
     return DatabaseSyncResponse.model_validate(result)
+
+
+@app.post("/api/admin/database/upload", response_model=DatabaseReplaceResponse)
+async def admin_upload_database(
+    file: UploadFile = File(...),
+    _: dict = Depends(require_auth),
+) -> DatabaseReplaceResponse:
+    filename = (file.filename or "").lower()
+    if not filename.endswith(".db") and not filename.endswith(".sqlite") and not filename.endswith(".sqlite3"):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="仅支持上传 .db / .sqlite / .sqlite3 文件")
+
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    temp_path = DB_UPLOAD_TMP_DIR / f"uploaded-{timestamp}-{filename or 'app.db'}"
+
+    try:
+        with temp_path.open("wb") as buffer:
+            while True:
+                chunk = await file.read(1024 * 1024)
+                if not chunk:
+                    break
+                buffer.write(chunk)
+
+        result = replace_database_file(temp_path)
+        return DatabaseReplaceResponse.model_validate(result)
+    finally:
+        await file.close()
+        if temp_path.exists():
+            temp_path.unlink()
 
 
 @app.post("/api/admin/content/publish", response_model=AiContentPublishResponse)

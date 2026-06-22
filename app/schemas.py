@@ -219,6 +219,20 @@ class DatabaseSyncResponse(ApiModel):
     executedSql: list[str] = Field(default_factory=list)
 
 
+class DatabaseReplaceResponse(ApiModel):
+    ok: bool
+    databasePath: str
+    backupPath: str
+    backupWalPath: str | None = None
+    backupShmPath: str | None = None
+    uploadedAt: datetime
+    appliedSync: bool
+    seeded: bool
+    missingTables: list[str] = Field(default_factory=list)
+    addedColumns: list[str] = Field(default_factory=list)
+    executedSql: list[str] = Field(default_factory=list)
+
+
 class AiContentPublishRequest(BaseModel):
     contentType: str
     mode: str = "upsert"

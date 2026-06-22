@@ -18,7 +18,7 @@ DEFAULT_SITE_CONFIGS = [
     },
     {
         "configKey": "hero_subtitle",
-        "configValue": json.dumps({"value": "独立开发者的窗口 — 产品、内容与实验"}, ensure_ascii=False),
+        "configValue": json.dumps({"value": "产品、内容与实验的窗口"}, ensure_ascii=False),
         "groupName": "home",
         "remark": "首页主副标题",
     },
@@ -40,8 +40,8 @@ DEFAULT_SITE_CONFIGS = [
             {
                 "name": "QUENTIN WINDOW",
                 "titleSuffix": "QUENTIN WINDOW",
-                "tagline": "独立开发者的产品与内容窗口",
-                "description": "用 AI 提效工作与生活，用产品和游戏解决真实问题。",
+                "tagline": "连接内容、App 与交流的网站窗口",
+                "description": "围绕内容展示 App、收集线索、承接前置销售，并持续维护后续交流。",
                 "copyright": "QUENTIN WINDOW. All rights reserved.",
                 "beian": {"label": "蜀ICP备19016117号-1", "href": "https://beian.miit.gov.cn/"},
             },
@@ -118,11 +118,11 @@ DEFAULT_PAGE_CONFIGS = [
                 "hero": {
                     "badge": "AI x 产品 x 游戏",
                     "title": "用 AI 提升工作与生活，用产品与游戏解决真实问题",
-                    "subtitle": "我是 Quentin，一名独立开发者与产品探索者。",
+                    "subtitle": "我是 Quentin，一名产品探索者。",
                 },
                 "community": {
-                    "title": "加入我的私域社区",
-                    "subtitle": "获取最新动态、产品内测资格、限时福利与深度交流。",
+                    "title": "加入我的私域联系圈",
+                    "subtitle": "获取内容更新、产品动态、体验通知与后续交流入口。",
                 },
             },
             ensure_ascii=False,
@@ -136,9 +136,9 @@ DEFAULT_PAGE_CONFIGS = [
         "title": "社区页配置",
         "configJson": json.dumps(
             {
-                "title": "加入我的私域社区",
-                "subtitle": "和我一起，持续探索 AI 提效与产品创造。",
-                "benefits": ["获取最新动态", "产品内测资格", "限时福利", "深度交流"],
+                "title": "加入我的私域联系圈",
+                "subtitle": "围绕内容、产品和后续合作交流，继续保持联系。",
+                "benefits": ["获取内容更新", "产品动态通知", "体验资格提醒", "持续交流联系"],
             },
             ensure_ascii=False,
             indent=2,
@@ -220,8 +220,8 @@ DEFAULT_PAGE_CONFIGS = [
         "title": "关于页配置",
         "configJson": json.dumps(
             {
-                "title": "一起创造有价值的产品，让生活更美好",
-                "subtitle": "这里是 QUENTIN WINDOW 的私人社区入口。",
+                "title": "一个连接内容、App 与交流的网站",
+                "subtitle": "这里既有内容记录，也承接我正在做的 App 展示、线索收集、前置销售和后续交流。",
                 "eyebrow": "欢迎来到昆廷的窗口",
                 "authorName": "Quentin",
                 "qrLabel": "",
@@ -268,7 +268,7 @@ DEFAULT_PAGE_CONFIGS = [
                 "title": "开源项目",
                 "subtitle": "把一部分能力、方法和实验开放出来，让更多人复用与延展。",
                 "projects": [
-                    {"name": "Hope Site", "desc": "当前品牌站点的前端工程骨架。", "tags": ["Vue", "Vite", "品牌站点"]},
+                    {"name": "Hope Site", "desc": "当前网站的前端工程骨架。", "tags": ["Vue", "Vite", "网站"]},
                     {"name": "Prompt Fragments", "desc": "围绕常用 AI 工作场景整理的提示模板集合。", "tags": ["AI", "工作流"]},
                     {"name": "Learning Toybox", "desc": "面向亲子互动和启蒙练习的轻量游戏原型。", "tags": ["教育", "互动体验"]},
                 ],

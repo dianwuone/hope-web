@@ -1,14 +1,17 @@
 <script setup lang="ts">
 import { ElMessage } from "element-plus";
 import { computed, reactive, ref } from "vue";
-import { publishAiContent, syncDatabase } from "@/api/admin";
+import { publishAiContent, syncDatabase, uploadDatabaseFile } from "@/api/admin";
 
 defineOptions({ name: "AdminContentPublishPage" });
 
 const syncing = ref(false);
+const uploadingDatabase = ref(false);
 const publishing = ref(false);
 const syncResult = ref<any | null>(null);
+const uploadResult = ref<any | null>(null);
 const publishResult = ref<any | null>(null);
+const selectedDatabaseFile = ref<File | null>(null);
 
 const syncForm = reactive({
   apply: true,
@@ -76,6 +79,14 @@ function fillTemplate() {
   publishForm.payloadText = payloadTemplateMap[publishForm.contentType];
 }
 
+function onDatabaseFileChange(file: any) {
+  selectedDatabaseFile.value = file?.raw || null;
+}
+
+function onDatabaseFileRemove() {
+  selectedDatabaseFile.value = null;
+}
+
 async function submitSync() {
   syncing.value = true;
   syncResult.value = null;
@@ -90,6 +101,25 @@ async function submitSync() {
     ElMessage.error(getErrorMessage(error, "数据库同步失败"));
   } finally {
     syncing.value = false;
+  }
+}
+
+async function submitDatabaseUpload() {
+  if (!selectedDatabaseFile.value) {
+    ElMessage.error("请先选择本地 SQLite 数据库文件");
+    return;
+  }
+
+  uploadingDatabase.value = true;
+  uploadResult.value = null;
+  try {
+    const res = await uploadDatabaseFile(selectedDatabaseFile.value);
+    uploadResult.value = res;
+    ElMessage.success("数据库文件已上传并切换");
+  } catch (error: any) {
+    ElMessage.error(getErrorMessage(error, "数据库上传失败"));
+  } finally {
+    uploadingDatabase.value = false;
   }
 }
 
@@ -125,11 +155,63 @@ async function submitPublish() {
   <div class="p-4 space-y-4">
     <div>
       <h2 class="text-xl font-semibold">同步与 AI 发布</h2>
-      <p class="text-sm text-gray-500">部署前后检查 SQLite 结构一致性，并通过统一入口让 AI 直接发布文章、产品或商品内容。</p>
+      <p class="text-sm text-gray-500">支持上传本地 SQLite 覆盖服务器数据库、补齐结构差异，并通过统一入口让 AI 直接发布文章、产品或商品内容。</p>
     </div>
 
     <el-row :gutter="16">
-      <el-col :xs="24" :lg="10">
+      <el-col :xs="24" :lg="8">
+        <el-card shadow="never" class="h-full">
+          <template #header>
+            <div>
+              <div class="text-base font-semibold">上传本地数据库</div>
+              <div class="text-sm text-gray-500">把本地最新的 SQLite 文件上传到服务器，自动备份旧库后再切换。</div>
+            </div>
+          </template>
+
+          <el-form label-position="top">
+            <el-form-item label="选择数据库文件">
+              <el-upload
+                :auto-upload="false"
+                :limit="1"
+                accept=".db,.sqlite,.sqlite3"
+                :show-file-list="true"
+                :on-change="onDatabaseFileChange"
+                :on-remove="onDatabaseFileRemove"
+              >
+                <el-button>选择本地 app.db</el-button>
+              </el-upload>
+            </el-form-item>
+
+            <el-alert
+              type="warning"
+              :closable="false"
+              title="这个操作会用上传的数据库替换当前服务端库，适合本地数据库就是最新权威数据的场景。"
+            />
+            <div class="mt-4">
+              <el-button type="primary" :loading="uploadingDatabase" @click="submitDatabaseUpload">
+                上传并切换数据库
+              </el-button>
+            </div>
+          </el-form>
+
+          <div v-if="uploadResult" class="mt-4">
+            <el-descriptions :column="1" border>
+              <el-descriptions-item label="执行结果">{{ uploadResult.ok ? "成功" : "失败" }}</el-descriptions-item>
+              <el-descriptions-item label="当前数据库">{{ uploadResult.databasePath }}</el-descriptions-item>
+              <el-descriptions-item label="备份文件">{{ uploadResult.backupPath || "无旧库可备份" }}</el-descriptions-item>
+              <el-descriptions-item label="上传时间">{{ uploadResult.uploadedAt }}</el-descriptions-item>
+              <el-descriptions-item label="补结构同步">{{ uploadResult.appliedSync ? "是" : "否" }}</el-descriptions-item>
+              <el-descriptions-item label="新增字段">{{ uploadResult.addedColumns?.length ? uploadResult.addedColumns.join("、") : "无" }}</el-descriptions-item>
+            </el-descriptions>
+
+            <el-form-item class="mt-4" label="执行 SQL">
+              <el-input :model-value="(uploadResult.executedSql || []).join('\n')" type="textarea" :rows="6" readonly />
+            </el-form-item>
+          </div>
+        </el-card>
+      </el-col>
+
+      <el-col :xs="24" :lg="8">
         <el-card shadow="never" class="h-full">
           <template #header>
             <div>
@@ -173,7 +255,7 @@ async function submitPublish() {
         </el-card>
       </el-col>
 
-      <el-col :xs="24" :lg="14">
+      <el-col :xs="24" :lg="8">
         <el-card shadow="never" class="h-full">
           <template #header>
             <div class="flex items-center justify-between gap-4">
