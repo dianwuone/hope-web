@@ -40,8 +40,8 @@ DEFAULT_SITE_CONFIGS = [
             {
                 "name": "QUENTIN WINDOW",
                 "titleSuffix": "QUENTIN WINDOW",
-                "tagline": "连接内容、App 与交流的网站窗口",
-                "description": "围绕内容展示 App、收集线索、承接前置销售，并持续维护后续交流。",
+                "tagline": "琨庭笔记",
+                "description": "琨庭笔记",
                 "copyright": "QUENTIN WINDOW. All rights reserved.",
                 "beian": {"label": "蜀ICP备19016117号-1", "href": "https://beian.miit.gov.cn/"},
             },
