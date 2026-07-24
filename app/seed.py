@@ -38,11 +38,11 @@ DEFAULT_SITE_CONFIGS = [
         "configKey": "site_meta",
         "configValue": json.dumps(
             {
-                "name": "琨庭笔记",
-                "titleSuffix": "琨庭笔记",
-                "tagline": "琨庭笔记",
-                "description": "琨庭笔记",
-                "copyright": "琨庭笔记",
+                "name": "琨廷笔记",
+                "titleSuffix": "琨廷笔记",
+                "tagline": "琨廷笔记",
+                "description": "琨廷笔记",
+                "copyright": "琨廷笔记",
                 "beian": {"label": "蜀ICP备19016117号-1", "href": "https://beian.miit.gov.cn/"},
             },
             ensure_ascii=False,
